@@ -39,7 +39,7 @@ export default async function handler(req: Request, res: Response) {
 
   try {
     const authorization = String(req.headers.authorization || '');
-    const idToken = authorization.replace(/^Bearer\\s+/i, '').trim();
+    const idToken = authorization.replace(/^Bearer\s+/i, '').trim();
     if (!idToken) return sendError(res, 401, 'Missing Firebase ID token.');
 
     const adminApp = getAdminApp();
