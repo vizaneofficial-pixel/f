@@ -1,0 +1,373 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authenticated user profile with role-based access (CA firm staff or Client portal user) and tenant firm association.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 120 },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["ca", "client"], "maxLength": 20 },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["uid", "email", "displayName", "role", "firmId", "clientId", "createdAt", "updatedAt"]
+    },
+    "Firm": {
+      "title": "Firm",
+      "description": "Chartered Accountant firm tenant record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 120 },
+        "registrationNo": { "type": "string", "maxLength": 40 },
+        "gstin": { "type": "string", "maxLength": 20 },
+        "city": { "type": "string", "maxLength": 60 },
+        "defaultFinancialYear": { "type": "string", "maxLength": 20 },
+        "createdAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "name", "registrationNo", "gstin", "city", "defaultFinancialYear", "createdAt"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Client business entity managed by a CA firm.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 120 },
+        "code": { "type": "string", "maxLength": 24 },
+        "businessType": { "type": "string", "maxLength": 60 },
+        "gstin": { "type": "string", "maxLength": 20 },
+        "pan": { "type": "string", "maxLength": 16 },
+        "financialYear": { "type": "string", "maxLength": 20 },
+        "accountingStatus": { "type": "string", "enum": ["Up to Date", "Review Pending", "Action Required"], "maxLength": 30 },
+        "docProcessingStatus": { "type": "string", "enum": ["Idle", "Processing", "Attention"], "maxLength": 30 },
+        "tallyStatus": { "type": "string", "enum": ["Synced", "Pending Sync", "Disconnected"], "maxLength": 30 },
+        "contactEmail": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "name", "code", "businessType", "gstin", "pan", "financialYear", "accountingStatus", "docProcessingStatus", "tallyStatus", "contactEmail", "createdAt", "updatedAt"]
+    },
+    "FinancialYear": {
+      "title": "FinancialYear",
+      "description": "Financial year configuration per firm and client.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "label": { "type": "string", "maxLength": 20 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "endDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["Active", "Closed", "Audit"], "maxLength": 20 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "label", "startDate", "endDate", "status"]
+    },
+    "AccountingDocument": {
+      "title": "AccountingDocument",
+      "description": "Client-uploaded accounting document (invoice, bill, bank statement, note, receipt).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientName": { "type": "string", "maxLength": 120 },
+        "fileName": { "type": "string", "maxLength": 180 },
+        "fileType": { "type": "string", "maxLength": 20 },
+        "fileSize": { "type": "string", "maxLength": 30 },
+        "financialYear": { "type": "string", "maxLength": 20 },
+        "period": { "type": "string", "maxLength": 30 },
+        "category": { "type": "string", "maxLength": 50 },
+        "uploadDate": { "type": "string", "maxLength": 40 },
+        "processingStatus": { "type": "string", "enum": ["Queued", "Analyzing", "Completed", "Failed"], "maxLength": 30 },
+        "extractionStatus": { "type": "string", "enum": ["Pending", "Extracted", "Low Confidence", "Failed"], "maxLength": 30 },
+        "accountingStatus": { "type": "string", "enum": ["Unprocessed", "Voucher Drafted", "CA Approved", "Exception"], "maxLength": 30 },
+        "confidence": { "type": "number" },
+        "vendorOrParty": { "type": "string", "maxLength": 120 },
+        "invoiceNumber": { "type": "string", "maxLength": 60 },
+        "invoiceDate": { "type": "string", "maxLength": 30 },
+        "totalAmount": { "type": "number" },
+        "taxAmount": { "type": "number" },
+        "gstin": { "type": "string", "maxLength": 20 },
+        "uploadedByRole": { "type": "string", "enum": ["ca", "client"], "maxLength": 20 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "clientName", "fileName", "fileType", "fileSize", "financialYear", "period", "category", "uploadDate", "processingStatus", "extractionStatus", "accountingStatus", "confidence", "vendorOrParty", "invoiceNumber", "invoiceDate", "totalAmount", "taxAmount", "gstin", "uploadedByRole", "updatedAt"]
+    },
+    "AccountingProfile": {
+      "title": "AccountingProfile",
+      "description": "Client-specific accounting memory architecture, conventions, and GST rules.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "accountingMethod": { "type": "string", "maxLength": 40 },
+        "gstFilingFrequency": { "type": "string", "maxLength": 30 },
+        "reverseChargeDefault": { "type": "string", "maxLength": 40 },
+        "historicalBooksStatus": { "type": "string", "maxLength": 60 },
+        "profileCompleteness": { "type": "number" },
+        "aiLearningStatus": { "type": "string", "maxLength": 60 },
+        "conventionsSummary": { "type": "string", "maxLength": 500 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "accountingMethod", "gstFilingFrequency", "reverseChargeDefault", "historicalBooksStatus", "profileCompleteness", "aiLearningStatus", "conventionsSummary", "updatedAt"]
+    },
+    "LedgerAccount": {
+      "title": "LedgerAccount",
+      "description": "Client ledger account master and AI mapping rule.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientName": { "type": "string", "maxLength": 120 },
+        "name": { "type": "string", "maxLength": 120 },
+        "group": { "type": "string", "maxLength": 60 },
+        "openingBalance": { "type": "number" },
+        "balanceType": { "type": "string", "enum": ["Dr", "Cr"], "maxLength": 10 },
+        "gstApplicable": { "type": "string", "enum": ["Applicable", "Not Applicable", "Exempt"], "maxLength": 30 },
+        "gstin": { "type": "string", "maxLength": 20 },
+        "financialYear": { "type": "string", "maxLength": 20 },
+        "tallySyncStatus": { "type": "string", "enum": ["Synced", "Pending", "Mismatch"], "maxLength": 30 },
+        "aiSuggestedKeywords": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "clientName", "name", "group", "openingBalance", "balanceType", "gstApplicable", "gstin", "financialYear", "tallySyncStatus", "aiSuggestedKeywords", "updatedAt"]
+    },
+    "Voucher": {
+      "title": "Voucher",
+      "description": "Accounting voucher header with debit/credit validation and CA review status.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientName": { "type": "string", "maxLength": 120 },
+        "financialYear": { "type": "string", "maxLength": 20 },
+        "voucherDate": { "type": "string", "maxLength": 30 },
+        "voucherType": { "type": "string", "enum": ["Purchase", "Sales", "Payment", "Receipt", "Journal", "Credit Note", "Debit Note"], "maxLength": 30 },
+        "voucherNumber": { "type": "string", "maxLength": 40 },
+        "sourceDocumentId": { "type": "string", "maxLength": 128 },
+        "sourceDocumentName": { "type": "string", "maxLength": 180 },
+        "partyLedger": { "type": "string", "maxLength": 120 },
+        "primaryLedger": { "type": "string", "maxLength": 120 },
+        "taxLedger": { "type": "string", "maxLength": 120 },
+        "totalDebit": { "type": "number" },
+        "totalCredit": { "type": "number" },
+        "narration": { "type": "string", "maxLength": 400 },
+        "aiExplanation": { "type": "string", "maxLength": 500 },
+        "aiConfidence": { "type": "number" },
+        "validationStatus": { "type": "string", "enum": ["Valid", "Imbalanced", "GST Warning"], "maxLength": 30 },
+        "approvalStatus": { "type": "string", "enum": ["Pending Review", "CA Approved", "Rejected", "Info Requested", "Marked for Senior CA"], "maxLength": 40 },
+        "caLocked": { "type": "boolean" },
+        "tallySyncStatus": { "type": "string", "enum": ["Pending", "XML Generated", "Imported", "Failed"], "maxLength": 30 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "clientName", "financialYear", "voucherDate", "voucherType", "voucherNumber", "sourceDocumentId", "sourceDocumentName", "partyLedger", "primaryLedger", "taxLedger", "totalDebit", "totalCredit", "narration", "aiExplanation", "aiConfidence", "validationStatus", "approvalStatus", "caLocked", "tallySyncStatus", "updatedAt"]
+    },
+    "VoucherEntry": {
+      "title": "VoucherEntry",
+      "description": "Individual debit or credit line item belonging to a Voucher.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ledgerName": { "type": "string", "maxLength": 120 },
+        "ledgerGroup": { "type": "string", "maxLength": 60 },
+        "entryType": { "type": "string", "enum": ["Dr", "Cr"], "maxLength": 10 },
+        "amount": { "type": "number" }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "voucherId", "ledgerName", "ledgerGroup", "entryType", "amount"]
+    },
+    "AIProcessingJob": {
+      "title": "AIProcessingJob",
+      "description": "Simulated AI extraction and accounting rule matching job.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "documentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "documentName": { "type": "string", "maxLength": 180 },
+        "clientName": { "type": "string", "maxLength": 120 },
+        "stage": { "type": "string", "enum": ["Queued", "OCR & Layout", "Ledger Matching", "GST Validation", "Completed", "Failed"], "maxLength": 40 },
+        "confidence": { "type": "number" },
+        "validationSummary": { "type": "string", "maxLength": 200 },
+        "startedAt": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "documentId", "documentName", "clientName", "stage", "confidence", "validationSummary", "startedAt", "updatedAt"]
+    },
+    "ValidationResult": {
+      "title": "ValidationResult",
+      "description": "Accounting and GST validation check result for a document or voucher.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "checkType": { "type": "string", "maxLength": 60 },
+        "status": { "type": "string", "enum": ["Passed", "Warning", "Failed"], "maxLength": 20 },
+        "message": { "type": "string", "maxLength": 250 },
+        "checkedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "voucherId", "checkType", "status", "message", "checkedAt"]
+    },
+    "CAApproval": {
+      "title": "CAApproval",
+      "description": "Chartered Accountant sign-off or modification record on a voucher.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reviewerName": { "type": "string", "maxLength": 100 },
+        "decision": { "type": "string", "enum": ["CA Approved", "Rejected", "Info Requested", "Marked for Senior CA", "Edited & Approved"], "maxLength": 40 },
+        "notes": { "type": "string", "maxLength": 300 },
+        "decidedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "voucherId", "reviewerName", "decision", "notes", "decidedAt"]
+    },
+    "TallySyncJob": {
+      "title": "TallySyncJob",
+      "description": "Simulated TallyPrime XML generation and import synchronization job.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientName": { "type": "string", "maxLength": 120 },
+        "tallyCompany": { "type": "string", "maxLength": 120 },
+        "financialYear": { "type": "string", "maxLength": 20 },
+        "vouchersCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["XML Generated", "Simulated Import Success", "Partial Failure"], "maxLength": 40 },
+        "summary": { "type": "string", "maxLength": 250 },
+        "syncedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "clientName", "tallyCompany", "financialYear", "vouchersCount", "status", "summary", "syncedAt"]
+    },
+    "AuditEvent": {
+      "title": "AuditEvent",
+      "description": "Append-only immutable audit trail event across documents, vouchers, and Tally sync.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientName": { "type": "string", "maxLength": 120 },
+        "financialYear": { "type": "string", "maxLength": 20 },
+        "reference": { "type": "string", "maxLength": 80 },
+        "eventType": { "type": "string", "maxLength": 60 },
+        "actor": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 350 },
+        "timestamp": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "clientName", "financialYear", "reference", "eventType", "actor", "description", "timestamp"]
+    },
+    "ClientRequest": {
+      "title": "ClientRequest",
+      "description": "Communication request or message between CA firm and Client Portal user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "clientName": { "type": "string", "maxLength": 120 },
+        "financialYear": { "type": "string", "maxLength": 20 },
+        "title": { "type": "string", "maxLength": 150 },
+        "category": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "enum": ["Pending Client", "Submitted", "Resolved"], "maxLength": 30 },
+        "senderRole": { "type": "string", "enum": ["ca", "client"], "maxLength": 20 },
+        "message": { "type": "string", "maxLength": 400 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "ownerUid", "firmId", "clientId", "clientName", "financialYear", "title", "category", "status", "senderRole", "message", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Authenticated user profiles and active workspace role."
+    },
+    "/firms/{firmId}": {
+      "schema": "Firm",
+      "description": "Chartered Accountant firm tenant records."
+    },
+    "/clients/{clientId}": {
+      "schema": "Client",
+      "description": "Client companies managed by CA firms."
+    },
+    "/financialYears/{fyId}": {
+      "schema": "FinancialYear",
+      "description": "Financial years configured for clients."
+    },
+    "/documents/{docId}": {
+      "schema": "AccountingDocument",
+      "description": "Uploaded client accounting documents and extraction metadata."
+    },
+    "/accountingProfiles/{profileId}": {
+      "schema": "AccountingProfile",
+      "description": "Client-specific accounting memory profiles and conventions."
+    },
+    "/ledgerAccounts/{ledgerId}": {
+      "schema": "LedgerAccount",
+      "description": "Client ledger masters and AI mapping rules."
+    },
+    "/vouchers/{voucherId}": {
+      "schema": "Voucher",
+      "description": "Accounting vouchers generated from documents."
+    },
+    "/voucherEntries/{entryId}": {
+      "schema": "VoucherEntry",
+      "description": "Individual debit/credit lines for accounting vouchers."
+    },
+    "/aiProcessingJobs/{jobId}": {
+      "schema": "AIProcessingJob",
+      "description": "Simulated AI extraction and ledger matching jobs."
+    },
+    "/validationResults/{valId}": {
+      "schema": "ValidationResult",
+      "description": "Voucher and GST validation check results."
+    },
+    "/caApprovals/{approvalId}": {
+      "schema": "CAApproval",
+      "description": "CA review decisions and sign-offs."
+    },
+    "/tallySyncJobs/{syncId}": {
+      "schema": "TallySyncJob",
+      "description": "Simulated TallyPrime XML synchronization jobs."
+    },
+    "/auditEvents/{eventId}": {
+      "schema": "AuditEvent",
+      "description": "Immutable append-only audit trail events."
+    },
+    "/clientRequests/{reqId}": {
+      "schema": "ClientRequest",
+      "description": "Document requests and messages between CA and Client Portal."
+    }
+  }
+}

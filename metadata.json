@@ -1,0 +1,6 @@
+{
+  "name": "Fenora — AI Accounting Automation Platform",
+  "description": "AI-powered accounting automation platform for Indian Chartered Accountant firms with client document portal, voucher review, GST reconciliation, and TallyPrime synchronization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

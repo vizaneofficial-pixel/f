@@ -1,0 +1,519 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 3. Entity Validation Blueprints (Synchronized with firebase-blueprint.json)
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'firmId', 'clientId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'firmId', 'clientId', 'createdAt', 'updatedAt'])
+        && data.uid == request.auth.uid
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 120
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.role is string && data.role.size() <= 20 && data.role in ['ca', 'client']
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.createdAt is string && data.createdAt.size() <= 40
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    function isValidFirm(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'name', 'registrationNo', 'gstin', 'city', 'defaultFinancialYear', 'createdAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'name', 'registrationNo', 'gstin', 'city', 'defaultFinancialYear', 'createdAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.registrationNo is string && data.registrationNo.size() <= 40
+        && data.gstin is string && data.gstin.size() <= 20
+        && data.city is string && data.city.size() <= 60
+        && data.defaultFinancialYear is string && data.defaultFinancialYear.size() <= 20
+        && data.createdAt is string && data.createdAt.size() <= 40;
+    }
+
+    function isValidClient(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'name', 'code', 'businessType', 'gstin', 'pan', 'financialYear', 'accountingStatus', 'docProcessingStatus', 'tallyStatus', 'contactEmail', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'name', 'code', 'businessType', 'gstin', 'pan', 'financialYear', 'accountingStatus', 'docProcessingStatus', 'tallyStatus', 'contactEmail', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.code is string && data.code.size() >= 1 && data.code.size() <= 24
+        && data.businessType is string && data.businessType.size() <= 60
+        && data.gstin is string && data.gstin.size() <= 20
+        && data.pan is string && data.pan.size() <= 16
+        && data.financialYear is string && data.financialYear.size() <= 20
+        && data.accountingStatus is string && data.accountingStatus.size() <= 30 && data.accountingStatus in ['Up to Date', 'Review Pending', 'Action Required']
+        && data.docProcessingStatus is string && data.docProcessingStatus.size() <= 30 && data.docProcessingStatus in ['Idle', 'Processing', 'Attention']
+        && data.tallyStatus is string && data.tallyStatus.size() <= 30 && data.tallyStatus in ['Synced', 'Pending Sync', 'Disconnected']
+        && data.contactEmail is string && data.contactEmail.size() <= 120
+        && data.createdAt is string && data.createdAt.size() <= 40
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    function isValidFinancialYear(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'label', 'startDate', 'endDate', 'status'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'label', 'startDate', 'endDate', 'status'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.label is string && data.label.size() <= 20
+        && data.startDate is string && data.startDate.size() <= 20
+        && data.endDate is string && data.endDate.size() <= 20
+        && data.status is string && data.status.size() <= 20 && data.status in ['Active', 'Closed', 'Audit'];
+    }
+
+    function isValidAccountingDocument(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'fileName', 'fileType', 'fileSize', 'financialYear', 'period', 'category', 'uploadDate', 'processingStatus', 'extractionStatus', 'accountingStatus', 'confidence', 'vendorOrParty', 'invoiceNumber', 'invoiceDate', 'totalAmount', 'taxAmount', 'gstin', 'uploadedByRole', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'fileName', 'fileType', 'fileSize', 'financialYear', 'period', 'category', 'uploadDate', 'processingStatus', 'extractionStatus', 'accountingStatus', 'confidence', 'vendorOrParty', 'invoiceNumber', 'invoiceDate', 'totalAmount', 'taxAmount', 'gstin', 'uploadedByRole', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.clientName is string && data.clientName.size() <= 120
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 180
+        && data.fileType is string && data.fileType.size() <= 20
+        && data.fileSize is string && data.fileSize.size() <= 30
+        && data.financialYear is string && data.financialYear.size() <= 20
+        && data.period is string && data.period.size() <= 30
+        && data.category is string && data.category.size() <= 50
+        && data.uploadDate is string && data.uploadDate.size() <= 40
+        && data.processingStatus is string && data.processingStatus.size() <= 30 && data.processingStatus in ['Queued', 'Analyzing', 'Completed', 'Failed']
+        && data.extractionStatus is string && data.extractionStatus.size() <= 30 && data.extractionStatus in ['Pending', 'Extracted', 'Low Confidence', 'Failed']
+        && data.accountingStatus is string && data.accountingStatus.size() <= 30 && data.accountingStatus in ['Unprocessed', 'Voucher Drafted', 'CA Approved', 'Exception']
+        && data.confidence is number && data.confidence >= 0 && data.confidence <= 100
+        && data.vendorOrParty is string && data.vendorOrParty.size() <= 120
+        && data.invoiceNumber is string && data.invoiceNumber.size() <= 60
+        && data.invoiceDate is string && data.invoiceDate.size() <= 30
+        && data.totalAmount is number
+        && data.taxAmount is number
+        && data.gstin is string && data.gstin.size() <= 20
+        && data.uploadedByRole is string && data.uploadedByRole.size() <= 20 && data.uploadedByRole in ['ca', 'client']
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    function isValidAccountingProfile(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'accountingMethod', 'gstFilingFrequency', 'reverseChargeDefault', 'historicalBooksStatus', 'profileCompleteness', 'aiLearningStatus', 'conventionsSummary', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'accountingMethod', 'gstFilingFrequency', 'reverseChargeDefault', 'historicalBooksStatus', 'profileCompleteness', 'aiLearningStatus', 'conventionsSummary', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.accountingMethod is string && data.accountingMethod.size() <= 40
+        && data.gstFilingFrequency is string && data.gstFilingFrequency.size() <= 30
+        && data.reverseChargeDefault is string && data.reverseChargeDefault.size() <= 40
+        && data.historicalBooksStatus is string && data.historicalBooksStatus.size() <= 60
+        && data.profileCompleteness is number && data.profileCompleteness >= 0 && data.profileCompleteness <= 100
+        && data.aiLearningStatus is string && data.aiLearningStatus.size() <= 60
+        && data.conventionsSummary is string && data.conventionsSummary.size() <= 500
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    function isValidLedgerAccount(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'name', 'group', 'openingBalance', 'balanceType', 'gstApplicable', 'gstin', 'financialYear', 'tallySyncStatus', 'aiSuggestedKeywords', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'name', 'group', 'openingBalance', 'balanceType', 'gstApplicable', 'gstin', 'financialYear', 'tallySyncStatus', 'aiSuggestedKeywords', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.clientName is string && data.clientName.size() <= 120
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.group is string && data.group.size() <= 60
+        && data.openingBalance is number
+        && data.balanceType is string && data.balanceType.size() <= 10 && data.balanceType in ['Dr', 'Cr']
+        && data.gstApplicable is string && data.gstApplicable.size() <= 30 && data.gstApplicable in ['Applicable', 'Not Applicable', 'Exempt']
+        && data.gstin is string && data.gstin.size() <= 20
+        && data.financialYear is string && data.financialYear.size() <= 20
+        && data.tallySyncStatus is string && data.tallySyncStatus.size() <= 30 && data.tallySyncStatus in ['Synced', 'Pending', 'Mismatch']
+        && data.aiSuggestedKeywords is string && data.aiSuggestedKeywords.size() <= 200
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    function isValidVoucher(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'voucherDate', 'voucherType', 'voucherNumber', 'sourceDocumentId', 'sourceDocumentName', 'partyLedger', 'primaryLedger', 'taxLedger', 'totalDebit', 'totalCredit', 'narration', 'aiExplanation', 'aiConfidence', 'validationStatus', 'approvalStatus', 'caLocked', 'tallySyncStatus', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'voucherDate', 'voucherType', 'voucherNumber', 'sourceDocumentId', 'sourceDocumentName', 'partyLedger', 'primaryLedger', 'taxLedger', 'totalDebit', 'totalCredit', 'narration', 'aiExplanation', 'aiConfidence', 'validationStatus', 'approvalStatus', 'caLocked', 'tallySyncStatus', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.clientName is string && data.clientName.size() <= 120
+        && data.financialYear is string && data.financialYear.size() <= 20
+        && data.voucherDate is string && data.voucherDate.size() <= 30
+        && data.voucherType is string && data.voucherType.size() <= 30 && data.voucherType in ['Purchase', 'Sales', 'Payment', 'Receipt', 'Journal', 'Credit Note', 'Debit Note']
+        && data.voucherNumber is string && data.voucherNumber.size() <= 40
+        && data.sourceDocumentId is string && data.sourceDocumentId.size() <= 128
+        && data.sourceDocumentName is string && data.sourceDocumentName.size() <= 180
+        && data.partyLedger is string && data.partyLedger.size() <= 120
+        && data.primaryLedger is string && data.primaryLedger.size() <= 120
+        && data.taxLedger is string && data.taxLedger.size() <= 120
+        && data.totalDebit is number
+        && data.totalCredit is number
+        && data.narration is string && data.narration.size() <= 400
+        && data.aiExplanation is string && data.aiExplanation.size() <= 500
+        && data.aiConfidence is number && data.aiConfidence >= 0 && data.aiConfidence <= 100
+        && data.validationStatus is string && data.validationStatus.size() <= 30 && data.validationStatus in ['Valid', 'Imbalanced', 'GST Warning']
+        && data.approvalStatus is string && data.approvalStatus.size() <= 40 && data.approvalStatus in ['Pending Review', 'CA Approved', 'Rejected', 'Info Requested', 'Marked for Senior CA']
+        && data.caLocked is bool
+        && data.tallySyncStatus is string && data.tallySyncStatus.size() <= 30 && data.tallySyncStatus in ['Pending', 'XML Generated', 'Imported', 'Failed']
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    function isValidVoucherEntry(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'voucherId', 'ledgerName', 'ledgerGroup', 'entryType', 'amount'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'voucherId', 'ledgerName', 'ledgerGroup', 'entryType', 'amount'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && isValidId(data.voucherId)
+        && data.ledgerName is string && data.ledgerName.size() <= 120
+        && data.ledgerGroup is string && data.ledgerGroup.size() <= 60
+        && data.entryType is string && data.entryType.size() <= 10 && data.entryType in ['Dr', 'Cr']
+        && data.amount is number;
+    }
+
+    function isValidAIProcessingJob(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'documentId', 'documentName', 'clientName', 'stage', 'confidence', 'validationSummary', 'startedAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'documentId', 'documentName', 'clientName', 'stage', 'confidence', 'validationSummary', 'startedAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && isValidId(data.documentId)
+        && data.documentName is string && data.documentName.size() <= 180
+        && data.clientName is string && data.clientName.size() <= 120
+        && data.stage is string && data.stage.size() <= 40 && data.stage in ['Queued', 'OCR & Layout', 'Ledger Matching', 'GST Validation', 'Completed', 'Failed']
+        && data.confidence is number
+        && data.validationSummary is string && data.validationSummary.size() <= 200
+        && data.startedAt is string && data.startedAt.size() <= 40
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    function isValidValidationResult(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'voucherId', 'checkType', 'status', 'message', 'checkedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'voucherId', 'checkType', 'status', 'message', 'checkedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && isValidId(data.voucherId)
+        && data.checkType is string && data.checkType.size() <= 60
+        && data.status is string && data.status.size() <= 20 && data.status in ['Passed', 'Warning', 'Failed']
+        && data.message is string && data.message.size() <= 250
+        && data.checkedAt is string && data.checkedAt.size() <= 40;
+    }
+
+    function isValidCAApproval(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'voucherId', 'reviewerName', 'decision', 'notes', 'decidedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'voucherId', 'reviewerName', 'decision', 'notes', 'decidedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && isValidId(data.voucherId)
+        && data.reviewerName is string && data.reviewerName.size() <= 100
+        && data.decision is string && data.decision.size() <= 40 && data.decision in ['CA Approved', 'Rejected', 'Info Requested', 'Marked for Senior CA', 'Edited & Approved']
+        && data.notes is string && data.notes.size() <= 300
+        && data.decidedAt is string && data.decidedAt.size() <= 40;
+    }
+
+    function isValidTallySyncJob(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'tallyCompany', 'financialYear', 'vouchersCount', 'status', 'summary', 'syncedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'tallyCompany', 'financialYear', 'vouchersCount', 'status', 'summary', 'syncedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.clientName is string && data.clientName.size() <= 120
+        && data.tallyCompany is string && data.tallyCompany.size() <= 120
+        && data.financialYear is string && data.financialYear.size() <= 20
+        && data.vouchersCount is number
+        && data.status is string && data.status.size() <= 40 && data.status in ['XML Generated', 'Simulated Import Success', 'Partial Failure']
+        && data.summary is string && data.summary.size() <= 250
+        && data.syncedAt is string && data.syncedAt.size() <= 40;
+    }
+
+    function isValidAuditEvent(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'reference', 'eventType', 'actor', 'description', 'timestamp'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'reference', 'eventType', 'actor', 'description', 'timestamp'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.clientName is string && data.clientName.size() <= 120
+        && data.financialYear is string && data.financialYear.size() <= 20
+        && data.reference is string && data.reference.size() <= 80
+        && data.eventType is string && data.eventType.size() <= 60
+        && data.actor is string && data.actor.size() <= 100
+        && data.description is string && data.description.size() <= 350
+        && data.timestamp is string && data.timestamp.size() <= 40;
+    }
+
+    function isValidClientRequest(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'title', 'category', 'status', 'senderRole', 'message', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'title', 'category', 'status', 'senderRole', 'message', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && isValidId(data.firmId)
+        && isValidId(data.clientId)
+        && data.clientName is string && data.clientName.size() <= 120
+        && data.financialYear is string && data.financialYear.size() <= 20
+        && data.title is string && data.title.size() <= 150
+        && data.category is string && data.category.size() <= 50
+        && data.status is string && data.status.size() <= 30 && data.status in ['Pending Client', 'Submitted', 'Resolved']
+        && data.senderRole is string && data.senderRole.size() <= 20 && data.senderRole in ['ca', 'client']
+        && data.message is string && data.message.size() <= 400
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    // 4. Collection Match Blocks
+
+    // Connection probe path (read-only for signed-in users or safe rejection)
+    match /test/{docId} {
+      allow get: if isSignedIn() && isValidId(docId);
+      allow list, create, update, delete: if false;
+    }
+
+    // Users Collection (Strict PII Isolation: Owner-only get, no list)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId && isValidUser(incoming());
+      allow update: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId && isValidUser(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'firmId', 'clientId', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Firms Collection
+    match /firms/{firmId} {
+      allow get: if isSignedIn() && isValidId(firmId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(firmId) && incoming().id == firmId && isValidFirm(incoming());
+      allow update: if isVerifiedUser() && isValidId(firmId) && isValidFirm(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'registrationNo', 'gstin', 'city', 'defaultFinancialYear']);
+      allow delete: if false;
+    }
+
+    // Clients Collection
+    match /clients/{clientId} {
+      allow get: if isSignedIn() && isValidId(clientId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(clientId) && incoming().id == clientId && isValidClient(incoming());
+      allow update: if isVerifiedUser() && isValidId(clientId) && isValidClient(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'code', 'businessType', 'gstin', 'pan', 'financialYear', 'accountingStatus', 'docProcessingStatus', 'tallyStatus', 'contactEmail', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Financial Years Collection
+    match /financialYears/{fyId} {
+      allow get: if isSignedIn() && isValidId(fyId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(fyId) && incoming().id == fyId && isValidFinancialYear(incoming());
+      allow update: if isVerifiedUser() && isValidId(fyId) && isValidFinancialYear(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'label', 'startDate', 'endDate']);
+      allow delete: if false;
+    }
+
+    // Accounting Documents Collection
+    match /documents/{docId} {
+      allow get: if isSignedIn() && isValidId(docId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(docId) && incoming().id == docId && isValidAccountingDocument(incoming());
+      allow update: if isVerifiedUser() && isValidId(docId) && isValidAccountingDocument(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().clientId == existing().clientId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['processingStatus', 'extractionStatus', 'accountingStatus', 'confidence', 'vendorOrParty', 'invoiceNumber', 'invoiceDate', 'totalAmount', 'taxAmount', 'gstin', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Accounting Profiles Collection
+    match /accountingProfiles/{profileId} {
+      allow get: if isSignedIn() && isValidId(profileId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(profileId) && incoming().id == profileId && isValidAccountingProfile(incoming());
+      allow update: if isVerifiedUser() && isValidId(profileId) && isValidAccountingProfile(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().clientId == existing().clientId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['accountingMethod', 'gstFilingFrequency', 'reverseChargeDefault', 'historicalBooksStatus', 'profileCompleteness', 'aiLearningStatus', 'conventionsSummary', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Ledger Accounts Collection
+    match /ledgerAccounts/{ledgerId} {
+      allow get: if isSignedIn() && isValidId(ledgerId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(ledgerId) && incoming().id == ledgerId && isValidLedgerAccount(incoming());
+      allow update: if isVerifiedUser() && isValidId(ledgerId) && isValidLedgerAccount(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().clientId == existing().clientId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'group', 'openingBalance', 'balanceType', 'gstApplicable', 'gstin', 'tallySyncStatus', 'aiSuggestedKeywords', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Vouchers Collection
+    match /vouchers/{voucherId} {
+      allow get: if isSignedIn() && isValidId(voucherId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(voucherId) && incoming().id == voucherId && isValidVoucher(incoming());
+      allow update: if isVerifiedUser() && isValidId(voucherId) && isValidVoucher(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().clientId == existing().clientId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['voucherDate', 'voucherType', 'partyLedger', 'primaryLedger', 'taxLedger', 'totalDebit', 'totalCredit', 'narration', 'aiExplanation', 'validationStatus', 'approvalStatus', 'caLocked', 'tallySyncStatus', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Voucher Entries Collection
+    match /voucherEntries/{entryId} {
+      allow get: if isSignedIn() && isValidId(entryId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(entryId) && incoming().id == entryId && isValidVoucherEntry(incoming());
+      allow update: if isVerifiedUser() && isValidId(entryId) && isValidVoucherEntry(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().voucherId == existing().voucherId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['ledgerName', 'ledgerGroup', 'entryType', 'amount']);
+      allow delete: if false;
+    }
+
+    // AI Processing Jobs Collection
+    match /aiProcessingJobs/{jobId} {
+      allow get: if isSignedIn() && isValidId(jobId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(jobId) && incoming().id == jobId && isValidAIProcessingJob(incoming());
+      allow update: if isVerifiedUser() && isValidId(jobId) && isValidAIProcessingJob(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['stage', 'confidence', 'validationSummary', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Validation Results Collection
+    match /validationResults/{valId} {
+      allow get: if isSignedIn() && isValidId(valId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(valId) && incoming().id == valId && isValidValidationResult(incoming());
+      allow update: if isVerifiedUser() && isValidId(valId) && isValidValidationResult(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'message', 'checkedAt']);
+      allow delete: if false;
+    }
+
+    // CA Approvals Collection
+    match /caApprovals/{approvalId} {
+      allow get: if isSignedIn() && isValidId(approvalId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(approvalId) && incoming().id == approvalId && isValidCAApproval(incoming());
+      allow update, delete: if false;
+    }
+
+    // Tally Sync Jobs Collection
+    match /tallySyncJobs/{syncId} {
+      allow get: if isSignedIn() && isValidId(syncId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(syncId) && incoming().id == syncId && isValidTallySyncJob(incoming());
+      allow update: if isVerifiedUser() && isValidId(syncId) && isValidTallySyncJob(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'summary', 'syncedAt']);
+      allow delete: if false;
+    }
+
+    // Audit Events Collection (STRICTLY APPEND-ONLY)
+    match /auditEvents/{eventId} {
+      allow get: if isSignedIn() && isValidId(eventId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(eventId) && incoming().id == eventId && isValidAuditEvent(incoming());
+      allow update, delete: if false;
+    }
+
+    // Client Requests Collection (CA <-> Client Portal Communication)
+    match /clientRequests/{reqId} {
+      allow get: if isSignedIn() && isValidId(reqId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(reqId) && incoming().id == reqId && isValidClientRequest(incoming());
+      allow update: if isVerifiedUser() && isValidId(reqId) && isValidClientRequest(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId
+        && incoming().clientId == existing().clientId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'senderRole', 'message', 'updatedAt']);
+      allow delete: if false;
+    }
+  }
+}
