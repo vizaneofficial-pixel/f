@@ -1182,17 +1182,94 @@ app.post('/api/admin/firms/create', async (req, res) => {
     updatedAt: nowIso,
   };
 
-  // Attempt Admin DB writes if available
-  if (adminDb) {
-    try {
-      await adminDb.collection('firms').doc(firmId).set(firmData);
-      await adminDb.collection('users').doc(uid).set(userData);
-    } catch {
-      // Handled via client SDK return payload
-    }
+  // Provisioning must not report success unless Authentication and Firestore are verified.
+  if (!adminDb) {
+    // If Auth user was created above, preserve its UID in the response so the admin can
+    // recover manually; do not claim that the firm has been provisioned.
+    return res.status(503).json({
+      ok: false,
+      errorType: 'FIRESTORE_ADMIN_UNAVAILABLE',
+      error: 'Firm profile provisioning is unavailable because the server cannot access Firestore using Firebase Admin credentials.',
+      ownerUid: uid,
+      guidance: 'Configure the backend Firestore Admin permissions, then retry using the existing Authentication UID. No firm/user Firestore profile was created by this request.',
+    });
   }
 
-  return res.json({
+  // For manually supplied UIDs, verify the Firebase Authentication identity before
+  // linking it to a firm. This intentionally fails closed when Admin Auth is unavailable.
+  try {
+    const adminApp = getApps().length ? getApps()[0] : null;
+    if (!adminApp) {
+      return res.status(503).json({ ok: false, errorType: 'ADMIN_AUTH_UNAVAILABLE', error: 'Firebase Admin Authentication is unavailable; cannot verify the supplied UID.' });
+    }
+    const authUser = await getAuth(adminApp).getUser(uid);
+    if ((authUser.email || '').toLowerCase().trim() !== trimmedEmail) {
+      return res.status(400).json({ ok: false, errorType: 'UID_EMAIL_MISMATCH', error: 'The supplied Firebase UID does not belong to the supplied login email.' });
+    }
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return res.status(403).json({
+      ok: false,
+      errorType: 'MANUAL_UID_VERIFICATION_FAILED',
+      error: 'The supplied Firebase UID could not be verified against Firebase Authentication. No firm records were written.',
+      details: errMsg,
+    });
+  }
+
+  try {
+    const firmRef = adminDb.collection('firms').doc(firmId);
+    const userRef = adminDb.collection('users').doc(uid);
+
+    // Atomic Firestore transaction: neither required profile can be left half-written.
+    await adminDb.runTransaction(async (transaction) => {
+      const [firmSnap, userSnap] = await Promise.all([
+        transaction.get(firmRef),
+        transaction.get(userRef),
+      ]);
+      if (firmSnap.exists) {
+        throw new Error('FIRM_ID_ALREADY_EXISTS');
+      }
+      if (userSnap.exists) {
+        const existingUser = userSnap.data() || {};
+        if ((String(existingUser.email || '').toLowerCase().trim()) !== trimmedEmail) {
+          throw new Error('UID_ALREADY_LINKED_TO_DIFFERENT_EMAIL');
+        }
+        if (existingUser.firmId && existingUser.firmId !== firmId) {
+          throw new Error('UID_ALREADY_LINKED_TO_ANOTHER_FIRM');
+        }
+        throw new Error('USER_PROFILE_ALREADY_EXISTS');
+      }
+      transaction.create(firmRef, firmData);
+      transaction.create(userRef, userData);
+    });
+
+    // Verify persistence before reporting success.
+    const [savedFirm, savedUser] = await Promise.all([firmRef.get(), userRef.get()]);
+    if (!savedFirm.exists || !savedUser.exists ||
+        savedFirm.data()?.ownerUid !== uid || savedUser.data()?.firmId !== firmId) {
+      return res.status(500).json({
+        ok: false,
+        errorType: 'PROVISIONING_VERIFICATION_FAILED',
+        error: 'Firestore provisioning could not be verified. Do not provide login credentials yet.',
+        ownerUid: uid,
+        firmId,
+      });
+    }
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const statusCode = ['FIRM_ID_ALREADY_EXISTS', 'UID_ALREADY_LINKED_TO_DIFFERENT_EMAIL', 'UID_ALREADY_LINKED_TO_ANOTHER_FIRM', 'USER_PROFILE_ALREADY_EXISTS'].includes(errMsg) ? 409 : 500;
+    console.error('[Admin Create Firm] Firestore provisioning failed:', errMsg);
+    return res.status(statusCode).json({
+      ok: false,
+      errorType: 'FIRM_PROVISIONING_FAILED',
+      error: 'Firm provisioning failed. No success was reported; verify Firebase records before retrying.',
+      details: errMsg,
+      ownerUid: uid,
+      firmId,
+    });
+  }
+
+  return res.status(201).json({
     ok: true,
     firmId,
     ownerUid: uid,
