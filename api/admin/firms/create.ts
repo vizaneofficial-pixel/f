@@ -1,4 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { Request, Response } from 'express';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -27,11 +27,11 @@ function getAdminApp() {
   return initializeApp({ projectId });
 }
 
-function sendError(res: VercelResponse, status: number, error: string, errorType?: string, extra: Record<string, unknown> = {}) {
+function sendError(res: Response, status: number, error: string, errorType?: string, extra: Record<string, unknown> = {}) {
   return res.status(status).json({ ok: false, error, ...(errorType ? { errorType } : {}), ...extra });
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: Request, res: Response) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return sendError(res, 405, 'Method not allowed.');
