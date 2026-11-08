@@ -2,16 +2,20 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "Authenticated user profile with role-based access (CA firm staff or Client portal user) and tenant firm association.",
+      "description": "Authenticated user profile with role-based access (CA firm owner or Client portal user), membership status, and tenant firm association.",
       "type": "object",
       "properties": {
-        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "email": { "type": "string", "format": "email", "maxLength": 120 },
         "displayName": { "type": "string", "maxLength": 100 },
         "businessName": { "type": "string", "maxLength": 120 },
-        "role": { "type": "string", "enum": ["ca", "client"], "maxLength": 20 },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "contactPhone": { "type": "string", "maxLength": 40 },
+        "fullName": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["ca", "client", "firm_owner", "super_admin"], "maxLength": 20 },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "membershipStatus": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"], "maxLength": 20 },
+        "mustChangePassword": { "type": "boolean" },
         "createdAt": { "type": "string", "maxLength": 40 },
         "updatedAt": { "type": "string", "maxLength": 40 }
       },
@@ -19,34 +23,51 @@
     },
     "Firm": {
       "title": "Firm",
-      "description": "Chartered Accountant firm tenant record.",
+      "description": "Chartered Accountant firm tenant record with unique permanent firm_id and Google Drive connection metadata.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "name": { "type": "string", "maxLength": 120 },
+        "firmName": { "type": "string", "maxLength": 120 },
+        "ownerName": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 120 },
+        "contactPhone": { "type": "string", "maxLength": 40 },
         "registrationNo": { "type": "string", "maxLength": 40 },
         "gstin": { "type": "string", "maxLength": 20 },
         "city": { "type": "string", "maxLength": 60 },
         "defaultFinancialYear": { "type": "string", "maxLength": 20 },
-        "createdAt": { "type": "string", "maxLength": 40 }
+        "role": { "type": "string", "enum": ["firm_owner", "ca"], "maxLength": 20 },
+        "status": { "type": "string", "enum": ["active", "suspended"], "maxLength": 20 },
+        "mustChangePassword": { "type": "boolean" },
+        "driveConnected": { "type": "boolean" },
+        "driveEmail": { "type": "string", "maxLength": 120 },
+        "driveOnboardingCompleted": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
       },
       "required": ["id", "ownerUid", "name", "registrationNo", "gstin", "city", "defaultFinancialYear", "createdAt"]
     },
     "Client": {
       "title": "Client",
-      "description": "Client business entity managed by a CA firm.",
+      "description": "Client business entity registered under and managed by a specific CA firm.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmName": { "type": "string", "maxLength": 120 },
         "name": { "type": "string", "maxLength": 120 },
+        "businessName": { "type": "string", "maxLength": 120 },
         "code": { "type": "string", "maxLength": 24 },
         "businessType": { "type": "string", "maxLength": 60 },
         "gstin": { "type": "string", "maxLength": 20 },
         "pan": { "type": "string", "maxLength": 16 },
         "financialYear": { "type": "string", "maxLength": 20 },
+        "membershipStatus": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"], "maxLength": 20 },
         "accountingStatus": { "type": "string", "enum": ["Up to Date", "Review Pending", "Action Required"], "maxLength": 30 },
         "docProcessingStatus": { "type": "string", "enum": ["Idle", "Processing", "Attention"], "maxLength": 30 },
         "tallyStatus": { "type": "string", "enum": ["Synced", "Pending Sync", "Disconnected"], "maxLength": 30 },
@@ -61,10 +82,10 @@
       "description": "Financial year configuration per firm and client.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "label": { "type": "string", "maxLength": 20 },
         "startDate": { "type": "string", "maxLength": 20 },
         "endDate": { "type": "string", "maxLength": 20 },
@@ -74,13 +95,14 @@
     },
     "AccountingDocument": {
       "title": "AccountingDocument",
-      "description": "Client-uploaded accounting document (invoice, bill, bank statement, note, receipt).",
+      "description": "Metadata for client-uploaded accounting document stored in the CA firm's Google Drive.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "clientName": { "type": "string", "maxLength": 120 },
         "fileName": { "type": "string", "maxLength": 180 },
         "fileType": { "type": "string", "maxLength": 20 },
@@ -99,6 +121,8 @@
         "totalAmount": { "type": "number" },
         "taxAmount": { "type": "number" },
         "gstin": { "type": "string", "maxLength": 20 },
+        "driveFileId": { "type": "string", "maxLength": 128 },
+        "driveFolderPath": { "type": "string", "maxLength": 260 },
         "uploadedByRole": { "type": "string", "enum": ["ca", "client"], "maxLength": 20 },
         "updatedAt": { "type": "string", "maxLength": 40 }
       },
@@ -109,10 +133,10 @@
       "description": "Client-specific accounting memory architecture, conventions, and GST rules.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "accountingMethod": { "type": "string", "maxLength": 40 },
         "gstFilingFrequency": { "type": "string", "maxLength": 30 },
         "reverseChargeDefault": { "type": "string", "maxLength": 40 },
@@ -129,10 +153,10 @@
       "description": "Client ledger account master and AI mapping rule.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "clientName": { "type": "string", "maxLength": 120 },
         "name": { "type": "string", "maxLength": 120 },
         "group": { "type": "string", "maxLength": 60 },
@@ -152,10 +176,10 @@
       "description": "Accounting voucher header with debit/credit validation and CA review status.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "clientName": { "type": "string", "maxLength": 120 },
         "financialYear": { "type": "string", "maxLength": 20 },
         "voucherDate": { "type": "string", "maxLength": 30 },
@@ -184,11 +208,11 @@
       "description": "Individual debit or credit line item belonging to a Voucher.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "ledgerName": { "type": "string", "maxLength": 120 },
         "ledgerGroup": { "type": "string", "maxLength": 60 },
         "entryType": { "type": "string", "enum": ["Dr", "Cr"], "maxLength": 10 },
@@ -198,14 +222,14 @@
     },
     "AIProcessingJob": {
       "title": "AIProcessingJob",
-      "description": "Simulated AI extraction and accounting rule matching job.",
+      "description": "AI extraction and accounting rule matching job.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "documentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "documentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "documentName": { "type": "string", "maxLength": 180 },
         "clientName": { "type": "string", "maxLength": 120 },
         "stage": { "type": "string", "enum": ["Queued", "OCR & Layout", "Ledger Matching", "GST Validation", "Completed", "Failed"], "maxLength": 40 },
@@ -221,11 +245,11 @@
       "description": "Accounting and GST validation check result for a document or voucher.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "checkType": { "type": "string", "maxLength": 60 },
         "status": { "type": "string", "enum": ["Passed", "Warning", "Failed"], "maxLength": 20 },
         "message": { "type": "string", "maxLength": 250 },
@@ -238,11 +262,11 @@
       "description": "Chartered Accountant sign-off or modification record on a voucher.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "voucherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "reviewerName": { "type": "string", "maxLength": 100 },
         "decision": { "type": "string", "enum": ["CA Approved", "Rejected", "Info Requested", "Marked for Senior CA", "Edited & Approved"], "maxLength": 40 },
         "notes": { "type": "string", "maxLength": 300 },
@@ -252,13 +276,13 @@
     },
     "TallySyncJob": {
       "title": "TallySyncJob",
-      "description": "Simulated TallyPrime XML generation and import synchronization job.",
+      "description": "TallyPrime XML generation and import synchronization job.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "clientName": { "type": "string", "maxLength": 120 },
         "tallyCompany": { "type": "string", "maxLength": 120 },
         "financialYear": { "type": "string", "maxLength": 20 },
@@ -271,13 +295,13 @@
     },
     "AuditEvent": {
       "title": "AuditEvent",
-      "description": "Append-only immutable audit trail event across documents, vouchers, and Tally sync.",
+      "description": "Append-only immutable audit trail event across documents, vouchers, and approvals.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "clientName": { "type": "string", "maxLength": 120 },
         "financialYear": { "type": "string", "maxLength": 20 },
         "reference": { "type": "string", "maxLength": 80 },
@@ -290,29 +314,52 @@
     },
     "ClientRequest": {
       "title": "ClientRequest",
-      "description": "Communication request or message between CA firm and Client Portal user.",
+      "description": "Client registration approval request or document request between CA firm and Client.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
         "clientName": { "type": "string", "maxLength": 120 },
+        "businessName": { "type": "string", "maxLength": 120 },
+        "email": { "type": "string", "maxLength": 120 },
         "financialYear": { "type": "string", "maxLength": 20 },
         "title": { "type": "string", "maxLength": 150 },
         "category": { "type": "string", "maxLength": 50 },
-        "status": { "type": "string", "enum": ["Pending Client", "Submitted", "Resolved"], "maxLength": 30 },
+        "requestType": { "type": "string", "enum": ["MEMBERSHIP", "DOCUMENT"], "maxLength": 20 },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED", "Pending Client", "Submitted", "Resolved"], "maxLength": 30 },
         "senderRole": { "type": "string", "enum": ["ca", "client"], "maxLength": 20 },
         "message": { "type": "string", "maxLength": 400 },
+        "requestedAt": { "type": "string", "maxLength": 40 },
         "updatedAt": { "type": "string", "maxLength": 40 }
       },
       "required": ["id", "ownerUid", "firmId", "clientId", "clientName", "financialYear", "title", "category", "status", "senderRole", "message", "updatedAt"]
+    },
+    "FirmDriveConnection": {
+      "title": "FirmDriveConnection",
+      "description": "Private server-only encrypted Google Drive OAuth refresh tokens and folder references for CA firms.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "driveEmail": { "type": "string", "maxLength": 120 },
+        "encryptedRefreshToken": { "type": "string", "maxLength": 1000 },
+        "iv": { "type": "string", "maxLength": 100 },
+        "authTag": { "type": "string", "maxLength": 100 },
+        "rootFolderId": { "type": "string", "maxLength": 128 },
+        "connectedAt": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "firmId", "ownerUid", "driveEmail", "encryptedRefreshToken", "iv", "authTag", "connectedAt", "updatedAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
-      "description": "Authenticated user profiles and active workspace role."
+      "description": "Authenticated user profiles, membership status, and active workspace role."
     },
     "/firms/{firmId}": {
       "schema": "Firm",
@@ -320,7 +367,7 @@
     },
     "/clients/{clientId}": {
       "schema": "Client",
-      "description": "Client companies managed by CA firms."
+      "description": "Client companies registered under and managed by CA firms."
     },
     "/financialYears/{fyId}": {
       "schema": "FinancialYear",
@@ -328,7 +375,7 @@
     },
     "/documents/{docId}": {
       "schema": "AccountingDocument",
-      "description": "Uploaded client accounting documents and extraction metadata."
+      "description": "Uploaded client accounting document metadata and Drive file IDs."
     },
     "/accountingProfiles/{profileId}": {
       "schema": "AccountingProfile",
@@ -348,7 +395,7 @@
     },
     "/aiProcessingJobs/{jobId}": {
       "schema": "AIProcessingJob",
-      "description": "Simulated AI extraction and ledger matching jobs."
+      "description": "AI extraction and ledger matching jobs."
     },
     "/validationResults/{valId}": {
       "schema": "ValidationResult",
@@ -360,7 +407,7 @@
     },
     "/tallySyncJobs/{syncId}": {
       "schema": "TallySyncJob",
-      "description": "Simulated TallyPrime XML synchronization jobs."
+      "description": "TallyPrime XML synchronization jobs."
     },
     "/auditEvents/{eventId}": {
       "schema": "AuditEvent",
@@ -368,7 +415,11 @@
     },
     "/clientRequests/{reqId}": {
       "schema": "ClientRequest",
-      "description": "Document requests and messages between CA and Client Portal."
+      "description": "Client membership approval requests and CA-Client communications."
+    },
+    "/firmDriveConnections/{firmId}": {
+      "schema": "FirmDriveConnection",
+      "description": "Private server-only encrypted Google Drive OAuth refresh tokens and folder references for CA firms."
     }
   }
 }

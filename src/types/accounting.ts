@@ -1,28 +1,30 @@
-export type UserRole = 'ca' | 'client';
+export type UserRole = 'firm_owner' | 'ca' | 'client' | 'super_admin';
+
+export type MembershipStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
 export type NavigationTab =
   | 'overview'
   | 'clients'
   | 'documents'
   | 'ai-processing'
+  | 'reports'
+  | 'client-requests'
+  | 'settings'
   | 'accounting'
   | 'ledgers'
   | 'voucher-review'
   | 'gst'
   | 'tally'
-  | 'audit'
-  | 'settings';
+  | 'audit';
 
 export type ClientWorkspaceTab =
   | 'Overview'
   | 'Documents'
+  | 'Financial Reports'
+  | 'GST & Tally'
   | 'Accounting Profile'
-  | 'Historical Books'
-  | 'Ledger Mapping'
   | 'Vouchers'
-  | 'GST'
-  | 'Audit History'
-  | 'Tally Synchronization';
+  | 'Audit History';
 
 export type DocumentCategory =
   | 'Purchase Invoice'
@@ -64,35 +66,56 @@ export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
+  fullName?: string;
   businessName?: string;
+  contactPhone?: string;
   role: UserRole;
   firmId: string;
   clientId: string;
+  membershipStatus?: MembershipStatus;
+  mustChangePassword?: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface Firm {
   id: string;
+  firmId?: string;
   ownerUid: string;
   name: string;
+  firmName?: string;
+  ownerName?: string;
+  email?: string;
+  contactPhone?: string;
   registrationNo: string;
   gstin: string;
   city: string;
   defaultFinancialYear: string;
+  role?: 'firm_owner' | 'ca';
+  status?: 'active' | 'suspended';
+  mustChangePassword?: boolean;
+  driveConnected?: boolean;
+  driveEmail?: string;
+  driveOnboardingCompleted?: boolean;
+  active?: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Client {
   id: string;
   ownerUid: string;
+  clientUid?: string;
   firmId: string;
+  firmName?: string;
   name: string;
+  businessName?: string;
   code: string;
   businessType: string;
   gstin: string;
   pan: string;
   financialYear: string;
+  membershipStatus?: MembershipStatus;
   accountingStatus: 'Up to Date' | 'Review Pending' | 'Action Required';
   docProcessingStatus: 'Idle' | 'Processing' | 'Attention';
   tallyStatus: 'Synced' | 'Pending Sync' | 'Disconnected';
@@ -115,6 +138,7 @@ export interface FinancialYear {
 export interface AccountingDocument {
   id: string;
   ownerUid: string;
+  clientUid?: string;
   firmId: string;
   clientId: string;
   clientName: string;
@@ -135,6 +159,8 @@ export interface AccountingDocument {
   totalAmount: number;
   taxAmount: number;
   gstin: string;
+  driveFileId?: string;
+  driveFolderPath?: string;
   uploadedByRole: UserRole;
   updatedAt: string;
 }
@@ -281,15 +307,20 @@ export interface AuditEvent {
 export interface ClientRequest {
   id: string;
   ownerUid: string;
+  clientUid?: string;
   firmId: string;
   clientId: string;
   clientName: string;
+  businessName?: string;
+  email?: string;
   financialYear: string;
   title: string;
   category: string;
-  status: 'Pending Client' | 'Submitted' | 'Resolved';
+  requestType?: 'MEMBERSHIP' | 'DOCUMENT';
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'Pending Client' | 'Submitted' | 'Resolved';
   senderRole: UserRole;
   message: string;
+  requestedAt?: string;
   updatedAt: string;
 }
 

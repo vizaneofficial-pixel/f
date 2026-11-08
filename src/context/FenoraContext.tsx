@@ -1,12 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
+  User as FirebaseUser,
   onAuthStateChanged,
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
+  updatePassword,
   signOut as firebaseSignOut,
-  User as FirebaseUser,
 } from 'firebase/auth';
 import {
   collection,
@@ -15,14 +16,15 @@ import {
   getDocs,
   setDoc,
   updateDoc,
+  deleteDoc,
+  onSnapshot,
   query,
   where,
-  onSnapshot,
-  writeBatch,
 } from 'firebase/firestore';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../firebase';
 import {
   UserRole,
+  MembershipStatus,
   UserProfile,
   Firm,
   Client,
@@ -43,7 +45,16 @@ import {
   LedgerGroup,
   VoucherType,
 } from '../types/accounting';
-import { buildInitialSeedData, SIMULATED_GST_RECONCILIATION } from '../data/seedData';
+
+export interface DriveBackendStatus {
+  oauthConfigured: boolean;
+  missingEnvVars: string[];
+  connected: boolean;
+  driveEmail: string | null;
+  connectedAt: string | null;
+  folderStructureTemplate: string;
+  loading: boolean;
+}
 
 interface FenoraContextValue {
   firebaseUser: FirebaseUser | null;
@@ -53,7 +64,11 @@ interface FenoraContextValue {
   activeRole: UserRole;
   activePortalClientId: string;
   firm: Firm;
+  directoryFirms: Firm[];
+  allFirms: Firm[];
+  driveStatus: DriveBackendStatus;
   clients: Client[];
+  approvedClients: Client[];
   financialYears: FinancialYear[];
   documents: AccountingDocument[];
   accountingProfiles: AccountingProfile[];
@@ -67,16 +82,62 @@ interface FenoraContextValue {
   auditEvents: AuditEvent[];
   clientRequests: ClientRequest[];
   gstReconciliation: GSTReconciliationItem[];
-  // Authentication methods
-  signInWithEmail: (email: string, pass: string) => Promise<{ ok: boolean; error?: string }>;
-  signUpWithEmail: (email: string, pass: string, name?: string, role?: UserRole, businessName?: string) => Promise<{ ok: boolean; error?: string }>;
-  sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
-  signInWithGoogle: (preferredRole?: UserRole, preferredClientId?: string) => Promise<{ ok: boolean; error?: string }>;
-  signOutUser: () => Promise<void>;
+  setActiveRole: (role: UserRole) => void;
+  setActivePortalClientId: (clientId: string) => void;
   enterWorkspaceAsRole: (role: UserRole, clientId?: string) => Promise<void>;
-  // Accounting actions
+  signInWithGoogle: (
+    preferredRole?: UserRole,
+    preferredClientId?: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  signInWithEmail: (email: string, pass: string) => Promise<{ ok: boolean; error?: string }>;
+  signUpWithEmail: (
+    email: string,
+    pass: string,
+    name?: string,
+    role?: UserRole,
+    businessName?: string,
+    selectedFirmId?: string,
+    contactPhone?: string,
+    firmName?: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  completeCAFirmSetup: (input: {
+    firmName: string;
+    ownerName: string;
+    contactPhone: string;
+    city?: string;
+    registrationNo?: string;
+    gstin?: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  completeClientFirmSelection: (input: {
+    fullName: string;
+    businessName: string;
+    selectedFirmId: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  approveClientMembership: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
+  rejectClientMembership: (requestId: string) => Promise<{ ok: boolean; error?: string }>;
+  refreshDriveStatus: () => Promise<void>;
+  connectGoogleDrive: () => Promise<{
+    ok: boolean;
+    error?: string;
+    missingEnvVars?: string[];
+  }>;
+  disconnectGoogleDrive: () => Promise<{ ok: boolean; error?: string }>;
+  completeDriveOnboarding: () => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
+  changeFirstTimePassword: (newPassword: string) => Promise<{ ok: boolean; error?: string }>;
+  createFirmAdmin: (input: {
+    firmName: string;
+    ownerName: string;
+    email: string;
+    temporaryPassword?: string;
+    manualUid?: string;
+  }) => Promise<{ ok: boolean; error?: string; errorType?: string; guidance?: string }>;
+  toggleFirmStatus: (firmId: string, status: 'active' | 'suspended') => Promise<{ ok: boolean; error?: string }>;
+  updateFirmDetails: (firmId: string, updates: Partial<Firm>) => Promise<{ ok: boolean; error?: string }>;
+  signOutUser: () => Promise<void>;
   createClient: (input: {
     name: string;
+    businessName?: string;
     code: string;
     businessType: string;
     gstin: string;
@@ -96,6 +157,21 @@ interface FenoraContextValue {
     vendorOrParty?: string;
     totalAmount?: number;
   }) => Promise<AccountingDocument>;
+  verifyAndUploadClientDocument: (input: {
+    clientId: string;
+    fileName: string;
+    fileType: string;
+    fileSize: string;
+    financialYear: string;
+    period: string;
+    category: DocumentCategory;
+    file?: File;
+  }) => Promise<{
+    ok: boolean;
+    error?: string;
+    targetDrivePath?: string;
+    missingEnvVars?: string[];
+  }>;
   triggerAIProcessingForDoc: (docId: string) => Promise<void>;
   createLedgerAccount: (input: {
     clientId: string;
@@ -120,10 +196,19 @@ interface FenoraContextValue {
       primaryLedger: string;
       taxLedger: string;
       narration: string;
-      entries: { id: string; ledgerName: string; ledgerGroup: string; entryType: 'Dr' | 'Cr'; amount: number }[];
+      entries: {
+        id: string;
+        ledgerName: string;
+        ledgerGroup: string;
+        entryType: 'Dr' | 'Cr';
+        amount: number;
+      }[];
     }
   ) => Promise<{ ok: boolean; error?: string }>;
-  updateAccountingProfile: (clientId: string, updates: Partial<AccountingProfile>) => Promise<void>;
+  updateAccountingProfile: (
+    clientId: string,
+    updates: Partial<AccountingProfile>
+  ) => Promise<void>;
   generateTallyXmlForClient: (clientId: string, financialYear: string) => Promise<string>;
   simulateTallyImportForClient: (clientId: string, financialYear: string) => Promise<void>;
   createClientRequest: (input: {
@@ -135,7 +220,7 @@ interface FenoraContextValue {
   }) => Promise<void>;
   updateClientRequestStatus: (
     reqId: string,
-    status: 'Pending Client' | 'Submitted' | 'Resolved',
+    status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'Pending Client' | 'Submitted' | 'Resolved',
     replyMessage?: string
   ) => Promise<void>;
 }
@@ -146,427 +231,936 @@ function sanitizeId(raw: string): string {
   return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120) || 'id_default';
 }
 
-export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const defaultSeed = buildInitialSeedData('demo_ca_user');
+function generateUniqueId(prefix: string): string {
+  const rand = Math.random().toString(36).slice(2, 9);
+  return sanitizeId(`${prefix}_${Date.now()}_${rand}`);
+}
 
+// Filter out any legacy demo/seeded records from earlier turns so all dashboards start in genuine Zero-State
+const LEGACY_SEED_PREFIXES = [
+  'client_aravind_tex',
+  'client_kalyani_auto',
+  'client_dakshin_spice',
+  'client_nirmal_cloud',
+  'fy_aravind',
+  'fy_kalyani',
+  'fy_dakshin',
+  'doc_inv_8841',
+  'doc_inv_1092',
+  'doc_exp_4410',
+  'doc_frt_3319',
+  'doc_bnk_hdfc',
+  'doc_cn_902',
+  'prof_aravind',
+  'prof_kalyani',
+  'prof_dakshin',
+  'prof_nirmal',
+  'ldg_surat',
+  'ldg_pur_igst',
+  'ldg_input_igst',
+  'ldg_reliance',
+  'ldg_sales_local',
+  'ldg_hdfc_cc',
+  'ldg_factory_power',
+  'ldg_maersk',
+  'vch_pur_8841',
+  'vch_sal_1092',
+  'vch_pmt_4410',
+  'vch_pur_3319',
+  'vch_cn_902',
+  've_8841',
+  've_1092',
+  've_4410',
+  've_3319',
+  've_902',
+  'job_hdfc',
+  'job_inv_8841',
+  'job_frt_3319',
+  'val_8841',
+  'val_3319',
+  'app_sal_1092',
+  'tsync_kalyani',
+  'tsync_aravind',
+  'aud_01',
+  'aud_02',
+  'aud_03',
+  'aud_04',
+  'aud_05',
+  'req_01',
+  'req_02',
+  'req_03',
+];
+
+function isLegacySeedRecord(id: string): boolean {
+  return LEGACY_SEED_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
+const EMPTY_FIRM: Firm = {
+  id: '',
+  ownerUid: '',
+  name: '',
+  ownerName: '',
+  email: '',
+  contactPhone: '',
+  registrationNo: 'Pending FRN',
+  gstin: 'Pending GSTIN',
+  city: 'India',
+  defaultFinancialYear: '2026-27',
+  driveConnected: false,
+  driveEmail: '',
+  driveOnboardingCompleted: false,
+  active: false,
+  createdAt: '',
+};
+
+export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [authReady, setAuthReady] = useState<boolean>(false);
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
   const [activeRole, setActiveRole] = useState<UserRole>('client');
-  const [activePortalClientId, setActivePortalClientId] = useState<string>('client_aravind_tex');
+  const [activePortalClientId, setActivePortalClientId] = useState<string>('');
 
-  const [firm, setFirm] = useState<Firm>(defaultSeed.firm);
-  const [clients, setClients] = useState<Client[]>(defaultSeed.clients);
-  const [financialYears, setFinancialYears] = useState<FinancialYear[]>(defaultSeed.financialYears);
-  const [documents, setDocuments] = useState<AccountingDocument[]>(defaultSeed.documents);
-  const [accountingProfiles, setAccountingProfiles] = useState<AccountingProfile[]>(
-    defaultSeed.accountingProfiles
-  );
-  const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>(defaultSeed.ledgerAccounts);
-  const [vouchers, setVouchers] = useState<Voucher[]>(defaultSeed.vouchers);
-  const [voucherEntries, setVoucherEntries] = useState<VoucherEntry[]>(defaultSeed.voucherEntries);
-  const [aiProcessingJobs, setAiProcessingJobs] = useState<AIProcessingJob[]>(
-    defaultSeed.aiProcessingJobs
-  );
-  const [validationResults, setValidationResults] = useState<ValidationResult[]>(
-    defaultSeed.validationResults
-  );
-  const [caApprovals, setCaApprovals] = useState<CAApproval[]>(defaultSeed.caApprovals);
-  const [tallySyncJobs, setTallySyncJobs] = useState<TallySyncJob[]>(defaultSeed.tallySyncJobs);
-  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>(defaultSeed.auditEvents);
-  const [clientRequests, setClientRequests] = useState<ClientRequest[]>(defaultSeed.clientRequests);
-  const [gstReconciliation] = useState<GSTReconciliationItem[]>(SIMULATED_GST_RECONCILIATION);
+  // Genuine Zero-State Initialization (No fake clients, documents, or transactions)
+  const [firm, setFirm] = useState<Firm>(EMPTY_FIRM);
+  const [directoryFirms, setDirectoryFirms] = useState<Firm[]>([]);
+  const [allFirms, setAllFirms] = useState<Firm[]>([]);
+  const [driveStatus, setDriveStatus] = useState<DriveBackendStatus>({
+    oauthConfigured: false,
+    missingEnvVars: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'],
+    connected: false,
+    driveEmail: null,
+    connectedAt: null,
+    folderStructureTemplate: 'Fenora / Clients / <Client Name> / <Financial Year> / Documents',
+    loading: false,
+  });
 
-  // Seed Firestore tenant workspace if empty for authenticated user
-  const ensureFirestoreSeeded = useCallback(
+  const [clients, setClients] = useState<Client[]>([]);
+  const [financialYears, setFinancialYears] = useState<FinancialYear[]>([]);
+  const [documents, setDocuments] = useState<AccountingDocument[]>([]);
+  const [accountingProfiles, setAccountingProfiles] = useState<AccountingProfile[]>([]);
+  const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>([]);
+  const [vouchers, setVouchers] = useState<Voucher[]>([]);
+  const [voucherEntries, setVoucherEntries] = useState<VoucherEntry[]>([]);
+  const [aiProcessingJobs, setAiProcessingJobs] = useState<AIProcessingJob[]>([]);
+  const [validationResults, setValidationResults] = useState<ValidationResult[]>([]);
+  const [caApprovals, setCaApprovals] = useState<CAApproval[]>([]);
+  const [tallySyncJobs, setTallySyncJobs] = useState<TallySyncJob[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [clientRequests, setClientRequests] = useState<ClientRequest[]>([]);
+  const [gstReconciliation] = useState<GSTReconciliationItem[]>([]);
+
+  // Subscribe to active CA firms directory so clients can search and select an eligible firm during registration
+  // Filter out any suspended or inactive firms
+  useEffect(() => {
+    const qFirms = query(collection(db, 'firms'), where('active', '==', true));
+    const unsub = onSnapshot(
+      qFirms,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => d.data() as Firm)
+          .filter((f) => f.active === true && f.status !== 'suspended' && f.name && !f.id.startsWith('firm_demo'));
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        setDirectoryFirms(list);
+      },
+      (err) => {
+        console.warn('Directory firms listener note:', err);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // Super Admin real-time listener for all firms
+  useEffect(() => {
+    if (!authReady || !firebaseUser) return;
+    const isSuperAdmin = (firebaseUser.email || '').toLowerCase() === 'relaxingsoundsformeditation@gmail.com';
+    if (!isSuperAdmin) return;
+
+    const unsub = onSnapshot(
+      collection(db, 'firms'),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as Firm);
+        list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        setAllFirms(list);
+      },
+      (err) => console.warn('All firms listener note:', err)
+    );
+    return () => unsub();
+  }, [authReady, firebaseUser]);
+
+  // Refresh Google Drive backend status for the active firm
+  const refreshDriveStatus = useCallback(async (targetFirmId?: string) => {
+    const fid = targetFirmId || firm.id;
+    setDriveStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await fetch(`/api/drive/status?firmId=${encodeURIComponent(fid || '')}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDriveStatus({
+          oauthConfigured: Boolean(data.oauthConfigured),
+          missingEnvVars: Array.isArray(data.missingEnvVars) ? data.missingEnvVars : [],
+          connected: Boolean(data.connected),
+          driveEmail: data.driveEmail || null,
+          connectedAt: data.connectedAt || null,
+          folderStructureTemplate:
+            data.folderStructureTemplate ||
+            'Fenora / Clients / <Client Name> / <Financial Year> / Documents',
+          loading: false,
+        });
+        return;
+      }
+    } catch {
+      // Fallback if API route unreachable
+    }
+    setDriveStatus((prev) => ({ ...prev, loading: false }));
+  }, [firm.id]);
+
+  useEffect(() => {
+    if (firm.id) {
+      refreshDriveStatus(firm.id);
+    }
+  }, [firm.id, refreshDriveStatus]);
+
+  // Synchronize client-persisted encrypted credentials to active server memory cache
+  const syncFirmDriveCredentials = useCallback(
+    async (firmId: string) => {
+      if (!firebaseUser || !firmId) return;
+      try {
+        const credSnap = await getDoc(doc(db, 'firmDriveConnections', firmId));
+        if (credSnap.exists()) {
+          const credData = credSnap.data();
+          const idToken = await firebaseUser.getIdToken();
+          await fetch('/api/drive/credentials/sync', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${idToken}`,
+            },
+            body: JSON.stringify({
+              firmId,
+              connectionRecord: credData,
+            }),
+          });
+        }
+      } catch (err) {
+        console.warn('[Drive Sync] Note during credentials sync:', err);
+      }
+    },
+    [firebaseUser]
+  );
+
+  // Synchronize credentials to server cache on startup or firm change
+  useEffect(() => {
+    if (firm.id && firm.driveConnected && firebaseUser && activeRole === 'ca') {
+      syncFirmDriveCredentials(firm.id);
+    }
+  }, [firm.id, firm.driveConnected, firebaseUser, activeRole, syncFirmDriveCredentials]);
+
+  // Handle Google Drive OAuth callback redirect parameters & secure handoff code
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const urlParams = new URLSearchParams(window.location.search);
+    const driveHandoff = urlParams.get('drive_handoff');
+    const driveConnected = urlParams.get('drive_connected');
+    const driveError = urlParams.get('drive_error');
+    const callbackFirmId = urlParams.get('firmId');
+    const callbackEmail = urlParams.get('driveEmail');
+
+    // 1. New Secure Handoff Code Exchange Flow
+    if (driveHandoff) {
+      const fid = callbackFirmId || firm.id;
+      if (fid && firebaseUser) {
+        (async () => {
+          try {
+            const idToken = await firebaseUser.getIdToken();
+            const exchangeRes = await fetch('/api/drive/handoff/exchange', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${idToken}`,
+              },
+              body: JSON.stringify({
+                handoffCode: driveHandoff,
+                firmId: fid,
+              }),
+            });
+            const exchangeData = await exchangeRes.json();
+            if (!exchangeRes.ok || !exchangeData.ok || !exchangeData.connectionRecord) {
+              throw new Error(exchangeData.error || 'Failed to exchange Google Drive handoff.');
+            }
+
+            const record = exchangeData.connectionRecord;
+            const nowIso = new Date().toISOString().slice(0, 35);
+
+            // Durably persist encrypted credentials to Firestore via Firebase Client SDK
+            // This runs in the authenticated CA firm owner's context, passing isFirmOwner(firmId)
+            await setDoc(doc(db, 'firmDriveConnections', fid), record);
+
+            // Update firm tenant metadata
+            await updateDoc(doc(db, 'firms', fid), {
+              driveConnected: true,
+              driveEmail: record.driveEmail,
+              driveOnboardingCompleted: true,
+              updatedAt: nowIso,
+            });
+
+            // Update local React state
+            setFirm((prev) => ({
+              ...prev,
+              driveConnected: true,
+              driveEmail: record.driveEmail,
+              driveOnboardingCompleted: true,
+              updatedAt: nowIso,
+            }));
+
+            await refreshDriveStatus(fid);
+            console.log('[Drive Handoff] Successfully persisted encrypted credentials to Firestore via Client SDK.');
+          } catch (err) {
+            console.error('[Drive Handoff] Error persisting Drive credentials:', err);
+          } finally {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        })();
+      }
+    } else if (driveConnected === 'true') {
+      const fid = callbackFirmId || firm.id;
+      if (fid) {
+        refreshDriveStatus(fid);
+        setFirm((prev) => ({
+          ...prev,
+          driveConnected: true,
+          driveEmail: callbackEmail || prev.driveEmail,
+          driveOnboardingCompleted: true,
+        }));
+        if (firebaseUser) {
+          const nowIso = new Date().toISOString().slice(0, 35);
+          updateDoc(doc(db, 'firms', fid), {
+            driveConnected: true,
+            driveEmail: callbackEmail || '',
+            driveOnboardingCompleted: true,
+            updatedAt: nowIso,
+          }).catch((err) => console.warn('[Drive OAuth] Note updating firm record:', err));
+        }
+      }
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (driveError) {
+      console.warn('[Drive OAuth] Callback error returned from server:', driveError);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [firm.id, firebaseUser, refreshDriveStatus]);
+
+  // Load or initialize user profile and tenant firm association upon authentication
+  const loadOrInitUserSession = useCallback(
     async (
       user: FirebaseUser,
-      preferredRole?: UserRole,
-      preferredClientId?: string,
-      displayName?: string,
-      businessName?: string
+      options?: {
+        role?: UserRole;
+        displayName?: string;
+        businessName?: string;
+        selectedFirmId?: string;
+        contactPhone?: string;
+        firmName?: string;
+      }
     ) => {
       const uid = sanitizeId(user.uid);
-      const seed = buildInitialSeedData(uid);
       const nowIso = new Date().toISOString().slice(0, 35);
-
-      let currentRole: UserRole = preferredRole || 'client';
-
-      // Check user profile
       const userRef = doc(db, 'users', uid);
-      try {
-        const userSnap = await getDoc(userRef);
-        if (!userSnap.exists()) {
-          const userEmailLower = (user.email || '').toLowerCase();
-          const isCAEmail =
-            userEmailLower.includes('fenoraca.in') ||
-            userEmailLower.startsWith('ca@') ||
-            userEmailLower.startsWith('vikram@') ||
-            preferredRole === 'ca';
-          const determinedRole: UserRole = isCAEmail ? 'ca' : 'client';
-          currentRole = determinedRole;
+      const userEmail = (user.email || '').toLowerCase().trim();
 
-          let targetClientId = preferredClientId;
-          if (!targetClientId) {
-            if (determinedRole === 'ca') {
-              targetClientId = 'client_aravind_tex';
-            } else {
-              const isKnownClient =
-                userEmailLower.includes('aravind') ||
-                userEmailLower === 'relaxingsoundsformeditation@gmail.com' ||
-                userEmailLower.includes('demo') ||
-                userEmailLower.includes('client');
-              targetClientId = isKnownClient ? 'client_aravind_tex' : 'pending';
-            }
+      try {
+        // 1. Super Admin automatic detection
+        const isSuperAdmin = userEmail === 'relaxingsoundsformeditation@gmail.com';
+        if (isSuperAdmin) {
+          const userSnap = await getDoc(userRef);
+          let adminProfile: UserProfile;
+          if (userSnap.exists()) {
+            const raw = userSnap.data() as UserProfile;
+            adminProfile = { ...raw, role: 'super_admin' };
+          } else {
+            adminProfile = {
+              uid,
+              email: user.email || '',
+              displayName: 'Fenora Super Admin',
+              role: 'super_admin',
+              firmId: 'fenora_hq',
+              clientId: 'admin',
+              membershipStatus: 'APPROVED',
+              createdAt: nowIso,
+              updatedAt: nowIso,
+            };
+            await setDoc(userRef, adminProfile);
+          }
+          setUserProfile(adminProfile);
+          setActiveRole('super_admin');
+          return;
+        }
+
+        // 2. Existing profile lookup
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          const existingProfile = userSnap.data() as UserProfile;
+          setUserProfile(existingProfile);
+          setActiveRole(existingProfile.role);
+          if (existingProfile.clientId) {
+            setActivePortalClientId(existingProfile.clientId);
           }
 
-          const fallbackName =
-            determinedRole === 'ca'
-              ? 'CA Vikram Deshmukh'
-              : (user.displayName || (user.email ? user.email.split('@')[0] : 'Client Workspace'));
+          // Fetch associated firm for firm_owner, ca, or client
+          const targetFirmId = existingProfile.firmId;
+          if (targetFirmId && targetFirmId !== 'pending' && targetFirmId !== 'fenora_hq') {
+            const firmSnap = await getDoc(doc(db, 'firms', targetFirmId));
+            if (firmSnap.exists()) {
+              setFirm(firmSnap.data() as Firm);
+            }
+          } else if (existingProfile.role === 'firm_owner' || existingProfile.role === 'ca') {
+            const q = query(collection(db, 'firms'), where('ownerUid', '==', uid));
+            const firmDocs = await getDocs(q);
+            if (!firmDocs.empty) {
+              setFirm(firmDocs.docs[0].data() as Firm);
+            }
+          }
+          return;
+        }
 
-          const newProfile: UserProfile = {
-            uid,
-            email: (user.email || 'user@fenora.in').slice(0, 120),
-            displayName: (displayName || user.displayName || fallbackName).slice(0, 100),
-            ...(businessName?.trim() ? { businessName: businessName.trim().slice(0, 120) } : {}),
-            role: determinedRole,
-            firmId: seed.firm.id,
-            clientId: targetClientId,
+        // 3. Client Registration Flow (public registration is restricted strictly to clients)
+        if (options?.role === 'client' && options?.selectedFirmId && options.selectedFirmId !== 'pending') {
+          const firmSnap = await getDoc(doc(db, 'firms', options.selectedFirmId));
+          if (!firmSnap.exists()) {
+            throw new Error('Selected CA firm was not found.');
+          }
+          const targetFirm = firmSnap.data() as Firm;
+          if (targetFirm.status === 'suspended' || targetFirm.active === false) {
+            throw new Error('The selected firm is currently suspended and not accepting new registrations.');
+          }
+
+          const uniqueClientId = generateUniqueId('client');
+          const clientFullName = (
+            options.displayName ||
+            user.displayName ||
+            (user.email ? user.email.split('@')[0] : 'Client')
+          ).slice(0, 100);
+          const clientBizName = (options.businessName || clientFullName).trim().slice(0, 120);
+          const clientEmail = (user.email || '').slice(0, 120);
+
+          const newClientRecord: Client = {
+            id: uniqueClientId,
+            ownerUid: targetFirm.ownerUid,
+            clientUid: uid,
+            firmId: targetFirm.id,
+            firmName: targetFirm.name,
+            name: clientFullName,
+            businessName: clientBizName,
+            code: clientBizName
+              .replace(/[^a-zA-Z0-9]/g, '')
+              .toUpperCase()
+              .slice(0, 6) || 'CL01',
+            businessType: clientBizName,
+            gstin: 'Pending',
+            pan: 'Pending',
+            financialYear: targetFirm.defaultFinancialYear || '2026-27',
+            membershipStatus: 'PENDING',
+            accountingStatus: 'Review Pending',
+            docProcessingStatus: 'Idle',
+            tallyStatus: 'Pending Sync',
+            contactEmail: clientEmail,
             createdAt: nowIso,
             updatedAt: nowIso,
           };
-          await setDoc(userRef, newProfile);
-          setUserProfile(newProfile);
-          setActiveRole(newProfile.role);
-          setActivePortalClientId(newProfile.clientId);
-        } else {
-          const existingProfile = userSnap.data() as UserProfile;
-          currentRole = existingProfile.role;
-          setUserProfile(existingProfile);
-          setActiveRole(existingProfile.role);
-          setActivePortalClientId(existingProfile.clientId);
+
+          const newUserProfile: UserProfile = {
+            uid,
+            email: clientEmail,
+            displayName: clientFullName,
+            businessName: clientBizName,
+            role: 'client',
+            firmId: targetFirm.id,
+            clientId: uniqueClientId,
+            membershipStatus: 'PENDING',
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+
+          const membershipRequest: ClientRequest = {
+            id: generateUniqueId('req'),
+            ownerUid: targetFirm.ownerUid,
+            clientUid: uid,
+            firmId: targetFirm.id,
+            clientId: uniqueClientId,
+            clientName: clientFullName,
+            businessName: clientBizName,
+            email: clientEmail,
+            financialYear: targetFirm.defaultFinancialYear || '2026-27',
+            title: `New Client Registration: ${clientBizName}`,
+            category: 'Client Registration',
+            requestType: 'MEMBERSHIP',
+            status: 'PENDING',
+            senderRole: 'client',
+            message: `${clientFullName} (${clientBizName}) requested client portal access under ${targetFirm.name}.`,
+            requestedAt: nowIso,
+            updatedAt: nowIso,
+          };
+
+          await setDoc(doc(db, 'clients', uniqueClientId), newClientRecord);
+          await setDoc(userRef, newUserProfile);
+          await setDoc(doc(db, 'clientRequests', membershipRequest.id), membershipRequest);
+
+          setFirm(targetFirm);
+          setUserProfile(newUserProfile);
+          setActiveRole('client');
+          setActivePortalClientId(uniqueClientId);
+          return;
         }
+
+        // 4. Unregistered / unprofiled account fallback
+        console.warn(`Unregistered user signed in: ${user.email} (${uid})`);
+        setUserProfile(null);
       } catch (error) {
-        console.warn(`Profile load note for ${uid}:`, error);
-      }
-
-      // Only CA firm partners seed firm tenant workspace records into Firestore.
-      // Client portal accounts operate safely within their client workspace without firm batch mutations.
-      if (currentRole === 'ca') {
-        try {
-          const firmsSnap = await getDocs(query(collection(db, 'firms'), where('ownerUid', '==', uid)));
-          if (firmsSnap.empty) {
-            const batch = writeBatch(db);
-          const idSuffix = `_${uid.slice(0, 8)}`;
-          const mapId = (id: string) => sanitizeId(`${id}${idSuffix}`);
-
-          const seededFirm: Firm = { ...seed.firm, id: mapId(seed.firm.id) };
-          batch.set(doc(db, 'firms', seededFirm.id), seededFirm);
-
-          seed.clients.forEach((c) => {
-            const item: Client = { ...c, id: mapId(c.id), firmId: seededFirm.id };
-            batch.set(doc(db, 'clients', item.id), item);
-          });
-
-          seed.financialYears.forEach((fy) => {
-            const item: FinancialYear = {
-              ...fy,
-              id: mapId(fy.id),
-              firmId: seededFirm.id,
-              clientId: mapId(fy.clientId),
-            };
-            batch.set(doc(db, 'financialYears', item.id), item);
-          });
-
-          seed.documents.forEach((d) => {
-            const item: AccountingDocument = {
-              ...d,
-              id: mapId(d.id),
-              firmId: seededFirm.id,
-              clientId: mapId(d.clientId),
-            };
-            batch.set(doc(db, 'documents', item.id), item);
-          });
-
-          seed.accountingProfiles.forEach((ap) => {
-            const item: AccountingProfile = {
-              ...ap,
-              id: mapId(ap.id),
-              firmId: seededFirm.id,
-              clientId: mapId(ap.clientId),
-            };
-            batch.set(doc(db, 'accountingProfiles', item.id), item);
-          });
-
-          seed.ledgerAccounts.forEach((la) => {
-            const item: LedgerAccount = {
-              ...la,
-              id: mapId(la.id),
-              firmId: seededFirm.id,
-              clientId: mapId(la.clientId),
-            };
-            batch.set(doc(db, 'ledgerAccounts', item.id), item);
-          });
-
-          seed.vouchers.forEach((v) => {
-            const item: Voucher = {
-              ...v,
-              id: mapId(v.id),
-              firmId: seededFirm.id,
-              clientId: mapId(v.clientId),
-              sourceDocumentId: mapId(v.sourceDocumentId),
-            };
-            batch.set(doc(db, 'vouchers', item.id), item);
-          });
-
-          seed.voucherEntries.forEach((ve) => {
-            const item: VoucherEntry = {
-              ...ve,
-              id: mapId(ve.id),
-              firmId: seededFirm.id,
-              clientId: mapId(ve.clientId),
-              voucherId: mapId(ve.voucherId),
-            };
-            batch.set(doc(db, 'voucherEntries', item.id), item);
-          });
-
-          seed.aiProcessingJobs.forEach((job) => {
-            const item: AIProcessingJob = {
-              ...job,
-              id: mapId(job.id),
-              firmId: seededFirm.id,
-              clientId: mapId(job.clientId),
-              documentId: mapId(job.documentId),
-            };
-            batch.set(doc(db, 'aiProcessingJobs', item.id), item);
-          });
-
-          seed.validationResults.forEach((vr) => {
-            const item: ValidationResult = {
-              ...vr,
-              id: mapId(vr.id),
-              firmId: seededFirm.id,
-              clientId: mapId(vr.clientId),
-              voucherId: mapId(vr.voucherId),
-            };
-            batch.set(doc(db, 'validationResults', item.id), item);
-          });
-
-          seed.caApprovals.forEach((ca) => {
-            const item: CAApproval = {
-              ...ca,
-              id: mapId(ca.id),
-              firmId: seededFirm.id,
-              clientId: mapId(ca.clientId),
-              voucherId: mapId(ca.voucherId),
-            };
-            batch.set(doc(db, 'caApprovals', item.id), item);
-          });
-
-          seed.tallySyncJobs.forEach((ts) => {
-            const item: TallySyncJob = {
-              ...ts,
-              id: mapId(ts.id),
-              firmId: seededFirm.id,
-              clientId: mapId(ts.clientId),
-            };
-            batch.set(doc(db, 'tallySyncJobs', item.id), item);
-          });
-
-          seed.auditEvents.forEach((ae) => {
-            const item: AuditEvent = {
-              ...ae,
-              id: mapId(ae.id),
-              firmId: seededFirm.id,
-              clientId: mapId(ae.clientId),
-            };
-            batch.set(doc(db, 'auditEvents', item.id), item);
-          });
-
-          seed.clientRequests.forEach((cr) => {
-            const item: ClientRequest = {
-              ...cr,
-              id: mapId(cr.id),
-              firmId: seededFirm.id,
-              clientId: mapId(cr.clientId),
-            };
-            batch.set(doc(db, 'clientRequests', item.id), item);
-          });
-
-            await batch.commit();
-          }
-        } catch (error) {
-          console.warn('Initial CA firm workspace seed note:', error);
-        }
+        console.warn('Session initialization note:', error);
       }
     },
     []
   );
+
+  // Complete CA Firm Setup (for CA users who authenticated with Google or need to finish firm creation)
+  const completeCAFirmSetup = async (input: {
+    firmName: string;
+    ownerName: string;
+    contactPhone: string;
+    city?: string;
+    registrationNo?: string;
+    gstin?: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!firebaseUser) return { ok: false, error: 'Not authenticated.' };
+    const uid = sanitizeId(firebaseUser.uid);
+    const nowIso = new Date().toISOString().slice(0, 35);
+    const uniqueFirmId = generateUniqueId('firm');
+
+    const newFirm: Firm = {
+      id: uniqueFirmId,
+      ownerUid: uid,
+      name: input.firmName.trim().slice(0, 120),
+      ownerName: input.ownerName.trim().slice(0, 100),
+      email: (firebaseUser.email || '').slice(0, 120),
+      contactPhone: input.contactPhone.trim().slice(0, 40),
+      registrationNo: (input.registrationNo || 'CA-FRN').trim().slice(0, 40),
+      gstin: (input.gstin || 'Pending').trim().slice(0, 20),
+      city: (input.city || 'India').trim().slice(0, 60),
+      defaultFinancialYear: '2026-27',
+      driveConnected: false,
+      driveEmail: '',
+      driveOnboardingCompleted: false,
+      active: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    try {
+      await setDoc(doc(db, 'firms', uniqueFirmId), newFirm);
+      const updatedProfile: UserProfile = {
+        uid,
+        email: (firebaseUser.email || '').slice(0, 120),
+        displayName: input.ownerName.trim().slice(0, 100),
+        businessName: input.firmName.trim().slice(0, 120),
+        contactPhone: input.contactPhone.trim().slice(0, 40),
+        role: 'ca',
+        firmId: uniqueFirmId,
+        clientId: 'ca_owner',
+        membershipStatus: 'APPROVED',
+        createdAt: userProfile?.createdAt || nowIso,
+        updatedAt: nowIso,
+      };
+      await setDoc(doc(db, 'users', uid), updatedProfile);
+      setFirm(newFirm);
+      setUserProfile(updatedProfile);
+      setActiveRole('ca');
+      localStorage.setItem('fenora_ca_initialized', 'true');
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Failed to register CA firm.',
+      };
+    }
+  };
+
+  // Complete Client Firm Selection (for clients who signed in with Google or have firmId === 'pending')
+  const completeClientFirmSelection = async (input: {
+    fullName: string;
+    businessName: string;
+    selectedFirmId: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!firebaseUser) return { ok: false, error: 'Not authenticated.' };
+    const uid = sanitizeId(firebaseUser.uid);
+    const nowIso = new Date().toISOString().slice(0, 35);
+
+    try {
+      const firmSnap = await getDoc(doc(db, 'firms', input.selectedFirmId));
+      if (!firmSnap.exists()) {
+        return { ok: false, error: 'Selected CA firm does not exist.' };
+      }
+      const targetFirm = firmSnap.data() as Firm;
+      const uniqueClientId = generateUniqueId('client');
+      const clientFullName = input.fullName.trim().slice(0, 100);
+      const clientBizName = input.businessName.trim().slice(0, 120);
+      const clientEmail = (firebaseUser.email || '').slice(0, 120);
+
+      const newClientRecord: Client = {
+        id: uniqueClientId,
+        ownerUid: targetFirm.ownerUid,
+        clientUid: uid,
+        firmId: targetFirm.id,
+        firmName: targetFirm.name,
+        name: clientFullName,
+        businessName: clientBizName,
+        code:
+          clientBizName
+            .replace(/[^a-zA-Z0-9]/g, '')
+            .toUpperCase()
+            .slice(0, 6) || 'CL01',
+        businessType: clientBizName,
+        gstin: 'Pending',
+        pan: 'Pending',
+        financialYear: targetFirm.defaultFinancialYear || '2026-27',
+        membershipStatus: 'PENDING',
+        accountingStatus: 'Review Pending',
+        docProcessingStatus: 'Idle',
+        tallyStatus: 'Pending Sync',
+        contactEmail: clientEmail,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      const updatedProfile: UserProfile = {
+        uid,
+        email: clientEmail,
+        displayName: clientFullName,
+        businessName: clientBizName,
+        role: 'client',
+        firmId: targetFirm.id,
+        clientId: uniqueClientId,
+        membershipStatus: 'PENDING',
+        createdAt: userProfile?.createdAt || nowIso,
+        updatedAt: nowIso,
+      };
+
+      const membershipRequest: ClientRequest = {
+        id: generateUniqueId('req'),
+        ownerUid: targetFirm.ownerUid,
+        clientUid: uid,
+        firmId: targetFirm.id,
+        clientId: uniqueClientId,
+        clientName: clientFullName,
+        businessName: clientBizName,
+        email: clientEmail,
+        financialYear: targetFirm.defaultFinancialYear || '2026-27',
+        title: `New Client Registration: ${clientBizName}`,
+        category: 'Client Registration',
+        requestType: 'MEMBERSHIP',
+        status: 'PENDING',
+        senderRole: 'client',
+        message: `${clientFullName} (${clientBizName}) requested client portal access under ${targetFirm.name}.`,
+        requestedAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      await setDoc(doc(db, 'clients', uniqueClientId), newClientRecord);
+      await setDoc(doc(db, 'users', uid), updatedProfile);
+      await setDoc(doc(db, 'clientRequests', membershipRequest.id), membershipRequest);
+
+      setFirm(targetFirm);
+      setUserProfile(updatedProfile);
+      setActivePortalClientId(uniqueClientId);
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Failed to submit client registration.',
+      };
+    }
+  };
 
   // Auth state listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (user) {
-        await ensureFirestoreSeeded(user);
+        await loadOrInitUserSession(user);
       } else {
         setUserProfile(null);
+        setFirm(EMPTY_FIRM);
+        setClients([]);
+        setDocuments([]);
+        setVouchers([]);
+        setVoucherEntries([]);
+        setAiProcessingJobs([]);
+        setClientRequests([]);
+        setAuditEvents([]);
       }
       setAuthReady(true);
     });
     return () => unsubscribe();
-  }, [ensureFirestoreSeeded]);
+  }, [loadOrInitUserSession]);
 
-  // Attach real-time Firestore listeners when authenticated
+  // Listen to user's own profile in real time (so when CA approves a client, the client's UI unlocks immediately)
   useEffect(() => {
     if (!authReady || !firebaseUser) return;
     const uid = sanitizeId(firebaseUser.uid);
-
-    const unsubFirms = onSnapshot(
-      query(collection(db, 'firms'), where('ownerUid', '==', uid)),
+    const unsubUser = onSnapshot(
+      doc(db, 'users', uid),
       (snap) => {
-        if (!snap.empty) {
-          setFirm(snap.docs[0].data() as Firm);
+        if (snap.exists()) {
+          const data = snap.data() as UserProfile;
+          setUserProfile(data);
+          setActiveRole(data.role);
+          if (data.clientId) setActivePortalClientId(data.clientId);
         }
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'firms')
+      (err) => console.warn('User profile listener note:', err)
     );
+    return () => unsubUser();
+  }, [authReady, firebaseUser]);
 
-    const unsubClients = onSnapshot(
-      query(collection(db, 'clients'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) {
-          const list = snap.docs.map((d) => d.data() as Client);
+  // Attach real-time Firestore listeners scoped strictly to the authenticated user's role and firm
+  useEffect(() => {
+    if (!authReady || !firebaseUser || !userProfile) return;
+    const uid = sanitizeId(firebaseUser.uid);
+    if (userProfile.role === 'super_admin') {
+      return;
+    }
+    const isCA = userProfile.role === 'ca' || userProfile.role === 'firm_owner';
+
+    if (isCA) {
+      const unsubFirms = onSnapshot(
+        query(collection(db, 'firms'), where('ownerUid', '==', uid)),
+        (snap) => {
+          const validFirms = snap.docs
+            .map((d) => d.data() as Firm)
+            .filter((f) => f.active === true);
+          if (validFirms.length > 0) {
+            setFirm(validFirms[0]);
+          }
+        },
+        (err) => console.warn('Firm listener note:', err)
+      );
+
+      const unsubClients = onSnapshot(
+        query(collection(db, 'clients'), where('ownerUid', '==', uid)),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => d.data() as Client)
+            .filter((c) => !isLegacySeedRecord(c.id));
           setClients(list);
-          setActivePortalClientId((prev) =>
-            list.some((c) => c.id === prev) ? prev : list[0].id
+        },
+        (err) => console.warn('Clients listener note:', err)
+      );
+
+      const unsubFY = onSnapshot(
+        query(collection(db, 'financialYears'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setFinancialYears(
+            snap.docs
+              .map((d) => d.data() as FinancialYear)
+              .filter((f) => !isLegacySeedRecord(f.id))
           );
-        }
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'clients')
-    );
+        },
+        (err) => console.warn('FY listener note:', err)
+      );
 
-    const unsubFY = onSnapshot(
-      query(collection(db, 'financialYears'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setFinancialYears(snap.docs.map((d) => d.data() as FinancialYear));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'financialYears')
-    );
+      const unsubDocs = onSnapshot(
+        query(collection(db, 'documents'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setDocuments(
+            snap.docs
+              .map((d) => d.data() as AccountingDocument)
+              .filter((docItem) => !isLegacySeedRecord(docItem.id))
+          );
+        },
+        (err) => console.warn('Documents listener note:', err)
+      );
 
-    const unsubDocs = onSnapshot(
-      query(collection(db, 'documents'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setDocuments(snap.docs.map((d) => d.data() as AccountingDocument));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'documents')
-    );
+      const unsubProfiles = onSnapshot(
+        query(collection(db, 'accountingProfiles'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setAccountingProfiles(
+            snap.docs
+              .map((d) => d.data() as AccountingProfile)
+              .filter((p) => !isLegacySeedRecord(p.id))
+          );
+        },
+        (err) => console.warn('Profiles listener note:', err)
+      );
 
-    const unsubProfiles = onSnapshot(
-      query(collection(db, 'accountingProfiles'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty)
-          setAccountingProfiles(snap.docs.map((d) => d.data() as AccountingProfile));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'accountingProfiles')
-    );
+      const unsubLedgers = onSnapshot(
+        query(collection(db, 'ledgerAccounts'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setLedgerAccounts(
+            snap.docs
+              .map((d) => d.data() as LedgerAccount)
+              .filter((l) => !isLegacySeedRecord(l.id))
+          );
+        },
+        (err) => console.warn('Ledgers listener note:', err)
+      );
 
-    const unsubLedgers = onSnapshot(
-      query(collection(db, 'ledgerAccounts'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setLedgerAccounts(snap.docs.map((d) => d.data() as LedgerAccount));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'ledgerAccounts')
-    );
+      const unsubVouchers = onSnapshot(
+        query(collection(db, 'vouchers'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setVouchers(
+            snap.docs
+              .map((d) => d.data() as Voucher)
+              .filter((v) => !isLegacySeedRecord(v.id))
+          );
+        },
+        (err) => console.warn('Vouchers listener note:', err)
+      );
 
-    const unsubVouchers = onSnapshot(
-      query(collection(db, 'vouchers'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setVouchers(snap.docs.map((d) => d.data() as Voucher));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'vouchers')
-    );
+      const unsubEntries = onSnapshot(
+        query(collection(db, 'voucherEntries'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setVoucherEntries(
+            snap.docs
+              .map((d) => d.data() as VoucherEntry)
+              .filter((ve) => !isLegacySeedRecord(ve.id))
+          );
+        },
+        (err) => console.warn('VoucherEntries listener note:', err)
+      );
 
-    const unsubEntries = onSnapshot(
-      query(collection(db, 'voucherEntries'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setVoucherEntries(snap.docs.map((d) => d.data() as VoucherEntry));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'voucherEntries')
-    );
+      const unsubJobs = onSnapshot(
+        query(collection(db, 'aiProcessingJobs'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setAiProcessingJobs(
+            snap.docs
+              .map((d) => d.data() as AIProcessingJob)
+              .filter((j) => !isLegacySeedRecord(j.id))
+          );
+        },
+        (err) => console.warn('AIJobs listener note:', err)
+      );
 
-    const unsubJobs = onSnapshot(
-      query(collection(db, 'aiProcessingJobs'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setAiProcessingJobs(snap.docs.map((d) => d.data() as AIProcessingJob));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'aiProcessingJobs')
-    );
+      const unsubValidations = onSnapshot(
+        query(collection(db, 'validationResults'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setValidationResults(
+            snap.docs
+              .map((d) => d.data() as ValidationResult)
+              .filter((vr) => !isLegacySeedRecord(vr.id))
+          );
+        },
+        (err) => console.warn('ValidationResults listener note:', err)
+      );
 
-    const unsubValidations = onSnapshot(
-      query(collection(db, 'validationResults'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty)
-          setValidationResults(snap.docs.map((d) => d.data() as ValidationResult));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'validationResults')
-    );
+      const unsubApprovals = onSnapshot(
+        query(collection(db, 'caApprovals'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setCaApprovals(
+            snap.docs
+              .map((d) => d.data() as CAApproval)
+              .filter((ca) => !isLegacySeedRecord(ca.id))
+          );
+        },
+        (err) => console.warn('CAApprovals listener note:', err)
+      );
 
-    const unsubApprovals = onSnapshot(
-      query(collection(db, 'caApprovals'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setCaApprovals(snap.docs.map((d) => d.data() as CAApproval));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'caApprovals')
-    );
+      const unsubTally = onSnapshot(
+        query(collection(db, 'tallySyncJobs'), where('ownerUid', '==', uid)),
+        (snap) => {
+          setTallySyncJobs(
+            snap.docs
+              .map((d) => d.data() as TallySyncJob)
+              .filter((ts) => !isLegacySeedRecord(ts.id))
+          );
+        },
+        (err) => console.warn('TallySyncJobs listener note:', err)
+      );
 
-    const unsubTally = onSnapshot(
-      query(collection(db, 'tallySyncJobs'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setTallySyncJobs(snap.docs.map((d) => d.data() as TallySyncJob));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'tallySyncJobs')
-    );
-
-    const unsubAudit = onSnapshot(
-      query(collection(db, 'auditEvents'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) {
-          const events = snap.docs.map((d) => d.data() as AuditEvent);
+      const unsubAudit = onSnapshot(
+        query(collection(db, 'auditEvents'), where('ownerUid', '==', uid)),
+        (snap) => {
+          const events = snap.docs
+            .map((d) => d.data() as AuditEvent)
+            .filter((ae) => !isLegacySeedRecord(ae.id));
           events.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
           setAuditEvents(events);
-        }
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'auditEvents')
-    );
+        },
+        (err) => console.warn('AuditEvents listener note:', err)
+      );
 
-    const unsubRequests = onSnapshot(
-      query(collection(db, 'clientRequests'), where('ownerUid', '==', uid)),
-      (snap) => {
-        if (!snap.empty) setClientRequests(snap.docs.map((d) => d.data() as ClientRequest));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'clientRequests')
-    );
+      const unsubRequests = onSnapshot(
+        query(collection(db, 'clientRequests'), where('ownerUid', '==', uid)),
+        (snap) => {
+          const reqs = snap.docs
+            .map((d) => d.data() as ClientRequest)
+            .filter((cr) => !isLegacySeedRecord(cr.id));
+          reqs.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+          setClientRequests(reqs);
+        },
+        (err) => console.warn('ClientRequests listener note:', err)
+      );
 
-    return () => {
-      unsubFirms();
-      unsubClients();
-      unsubFY();
-      unsubDocs();
-      unsubProfiles();
-      unsubLedgers();
-      unsubVouchers();
-      unsubEntries();
-      unsubJobs();
-      unsubValidations();
-      unsubApprovals();
-      unsubTally();
-      unsubAudit();
-      unsubRequests();
-    };
-  }, [authReady, firebaseUser]);
+      return () => {
+        unsubFirms();
+        unsubClients();
+        unsubFY();
+        unsubDocs();
+        unsubProfiles();
+        unsubLedgers();
+        unsubVouchers();
+        unsubEntries();
+        unsubJobs();
+        unsubValidations();
+        unsubApprovals();
+        unsubTally();
+        unsubAudit();
+        unsubRequests();
+      };
+    } else {
+      // Client Portal listeners — strictly isolated to this client's own records (`clientUid == uid`)
+      const unsubClientRecord = onSnapshot(
+        query(collection(db, 'clients'), where('clientUid', '==', uid)),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => d.data() as Client)
+            .filter((c) => !isLegacySeedRecord(c.id));
+          setClients(list);
+          if (list[0]) {
+            setActivePortalClientId(list[0].id);
+          }
+        },
+        (err) => console.warn('Client own record listener note:', err)
+      );
+
+      const unsubClientDocs = onSnapshot(
+        query(collection(db, 'documents'), where('clientUid', '==', uid)),
+        (snap) => {
+          setDocuments(
+            snap.docs
+              .map((d) => d.data() as AccountingDocument)
+              .filter((docItem) => !isLegacySeedRecord(docItem.id))
+          );
+        },
+        (err) => console.warn('Client documents listener note:', err)
+      );
+
+      const unsubClientReqs = onSnapshot(
+        query(collection(db, 'clientRequests'), where('clientUid', '==', uid)),
+        (snap) => {
+          setClientRequests(
+            snap.docs
+              .map((d) => d.data() as ClientRequest)
+              .filter((cr) => !isLegacySeedRecord(cr.id))
+          );
+        },
+        (err) => console.warn('Client requests listener note:', err)
+      );
+
+      return () => {
+        unsubClientRecord();
+        unsubClientDocs();
+        unsubClientReqs();
+      };
+    }
+  }, [authReady, firebaseUser, userProfile]);
 
   const appendAuditEvent = useCallback(
     async (input: {
@@ -578,11 +1172,12 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       actor: string;
       description: string;
     }) => {
-      const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : 'demo_ca_user';
+      if (!firebaseUser || !firm.id) return;
+      const uid = sanitizeId(firebaseUser.uid);
       const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 19);
       const evt: AuditEvent = {
-        id: sanitizeId(`aud_${Date.now()}_${Math.floor(Math.random() * 1000)}`),
-        ownerUid: uid,
+        id: generateUniqueId('aud'),
+        ownerUid: firm.ownerUid || uid,
         firmId: firm.id,
         clientId: sanitizeId(input.clientId),
         clientName: input.clientName.slice(0, 120),
@@ -596,16 +1191,203 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       setAuditEvents((prev) => [evt, ...prev]);
 
-      if (firebaseUser) {
-        try {
-          await setDoc(doc(db, 'auditEvents', evt.id), evt);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.CREATE, `auditEvents/${evt.id}`);
-        }
+      try {
+        await setDoc(doc(db, 'auditEvents', evt.id), evt);
+      } catch (error) {
+        console.warn('Audit event log note:', error);
       }
     },
-    [firebaseUser, firm.id]
+    [firebaseUser, firm.id, firm.ownerUid]
   );
+
+  // CA Client Approval Actions
+  const approveClientMembership = async (
+    requestId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const req = clientRequests.find((r) => r.id === requestId);
+    if (!req) return { ok: false, error: 'Request not found.' };
+    const nowIso = new Date().toISOString().slice(0, 35);
+
+    try {
+      await updateDoc(doc(db, 'clientRequests', req.id), {
+        status: 'APPROVED',
+        updatedAt: nowIso,
+      });
+
+      await updateDoc(doc(db, 'clients', req.clientId), {
+        membershipStatus: 'APPROVED',
+        accountingStatus: 'Up to Date',
+        updatedAt: nowIso,
+      });
+
+      if (req.clientUid) {
+        await updateDoc(doc(db, 'users', req.clientUid), {
+          membershipStatus: 'APPROVED',
+          clientId: req.clientId,
+          updatedAt: nowIso,
+        });
+      }
+
+      await appendAuditEvent({
+        clientId: req.clientId,
+        clientName: req.businessName || req.clientName,
+        financialYear: req.financialYear || '2026-27',
+        reference: req.email || req.clientId,
+        eventType: 'Client Membership Approved',
+        actor: userProfile?.displayName || firm.ownerName || 'CA Partner',
+        description: `Approved client registration for ${req.clientName} (${req.businessName || req.clientName}).`,
+      });
+
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to approve client request.',
+      };
+    }
+  };
+
+  const rejectClientMembership = async (
+    requestId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const req = clientRequests.find((r) => r.id === requestId);
+    if (!req) return { ok: false, error: 'Request not found.' };
+    const nowIso = new Date().toISOString().slice(0, 35);
+
+    try {
+      await updateDoc(doc(db, 'clientRequests', req.id), {
+        status: 'REJECTED',
+        updatedAt: nowIso,
+      });
+
+      await updateDoc(doc(db, 'clients', req.clientId), {
+        membershipStatus: 'REJECTED',
+        updatedAt: nowIso,
+      });
+
+      if (req.clientUid) {
+        await updateDoc(doc(db, 'users', req.clientUid), {
+          membershipStatus: 'REJECTED',
+          clientId: req.clientId,
+          updatedAt: nowIso,
+        });
+      }
+
+      await appendAuditEvent({
+        clientId: req.clientId,
+        clientName: req.businessName || req.clientName,
+        financialYear: req.financialYear || '2026-27',
+        reference: req.email || req.clientId,
+        eventType: 'Client Membership Rejected',
+        actor: userProfile?.displayName || firm.ownerName || 'CA Partner',
+        description: `Rejected client registration request for ${req.clientName} (${req.businessName || req.clientName}).`,
+      });
+
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to reject client request.',
+      };
+    }
+  };
+
+  // Google Drive Backend Integration Actions
+  const connectGoogleDrive = async (): Promise<{
+    ok: boolean;
+    error?: string;
+    missingEnvVars?: string[];
+  }> => {
+    if (!firebaseUser || !firm.id) {
+      return { ok: false, error: 'Firm profile is not initialized.' };
+    }
+    try {
+      const res = await fetch('/api/drive/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firmId: firm.id,
+          ownerUid: sanitizeId(firebaseUser.uid),
+        }),
+      });
+      const data = await res.json();
+      await refreshDriveStatus(firm.id);
+
+      if (!res.ok || !data.ok) {
+        return {
+          ok: false,
+          error:
+            data.error ||
+            'Backend Google Drive OAuth is not configured yet. Configure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on the server.',
+          missingEnvVars: data.missingEnvVars,
+        };
+      }
+
+      if (data.authUrl) {
+        window.location.href = data.authUrl;
+        return { ok: true };
+      }
+
+      return { ok: true };
+    } catch {
+      return {
+        ok: false,
+        error:
+          'Unable to reach backend Google Drive OAuth service. Ensure server OAuth credentials are configured.',
+      };
+    }
+  };
+
+  const disconnectGoogleDrive = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!firebaseUser || !firm.id) {
+      return { ok: false, error: 'Firm profile is not initialized.' };
+    }
+    try {
+      await fetch('/api/drive/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firmId: firm.id,
+          ownerUid: sanitizeId(firebaseUser.uid),
+        }),
+      });
+
+      // Remove from client-persisted Firestore collection
+      try {
+        await deleteDoc(doc(db, 'firmDriveConnections', firm.id));
+      } catch (e) {
+        console.warn('[Drive Disconnect] Firestore deleteDoc note:', e);
+      }
+
+      const nowIso = new Date().toISOString().slice(0, 35);
+      await updateDoc(doc(db, 'firms', firm.id), {
+        driveConnected: false,
+        driveEmail: '',
+        updatedAt: nowIso,
+      });
+      await refreshDriveStatus(firm.id);
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Failed to disconnect Google Drive.',
+      };
+    }
+  };
+
+  const completeDriveOnboarding = async () => {
+    if (!firebaseUser || !firm.id) return;
+    const nowIso = new Date().toISOString().slice(0, 35);
+    setFirm((prev) => ({ ...prev, driveOnboardingCompleted: true, updatedAt: nowIso }));
+    try {
+      await updateDoc(doc(db, 'firms', firm.id), {
+        driveOnboardingCompleted: true,
+        updatedAt: nowIso,
+      });
+    } catch (err) {
+      console.warn('Drive onboarding update note:', err);
+    }
+  };
 
   // Format Firebase Auth errors into clear, human-friendly messages
   const formatAuthError = (err: unknown): string => {
@@ -624,7 +1406,7 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return 'Password must be at least 6 characters.';
         case 'auth/popup-closed-by-user':
         case 'auth/cancelled-popup-request':
-          return ''; // Intentionally cancelled
+          return '';
         case 'auth/popup-blocked':
           return 'Pop-up blocked. Please allow pop-ups for this site.';
         case 'auth/account-exists-with-different-credential':
@@ -645,13 +1427,15 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return msg.replace(/^Firebase:\s*/, '').replace(/\s*\([a-z0-9/-]+\)\.?$/, '');
   };
 
-  // Email and Password Sign In
-  const signInWithEmail = async (email: string, pass: string): Promise<{ ok: boolean; error?: string }> => {
+  const signInWithEmail = async (
+    email: string,
+    pass: string
+  ): Promise<{ ok: boolean; error?: string }> => {
     setIsSigningIn(true);
     try {
       const res = await signInWithEmailAndPassword(auth, email.trim(), pass);
       if (res.user) {
-        await ensureFirestoreSeeded(res.user);
+        await loadOrInitUserSession(res.user);
       }
       return { ok: true };
     } catch (err: unknown) {
@@ -661,19 +1445,27 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Email and Password Sign Up
   const signUpWithEmail = async (
     email: string,
     pass: string,
     name?: string,
     role: UserRole = 'client',
-    businessName?: string
+    businessName?: string,
+    selectedFirmId?: string
   ): Promise<{ ok: boolean; error?: string }> => {
+    if (!selectedFirmId || selectedFirmId === 'pending') {
+      return { ok: false, error: 'Please select an active accounting/CA firm.' };
+    }
     setIsSigningIn(true);
     try {
       const res = await createUserWithEmailAndPassword(auth, email.trim(), pass);
       if (res.user) {
-        await ensureFirestoreSeeded(res.user, role, undefined, name?.trim(), businessName?.trim());
+        await loadOrInitUserSession(res.user, {
+          role: 'client',
+          displayName: name?.trim(),
+          businessName: businessName?.trim(),
+          selectedFirmId,
+        });
       }
       return { ok: true };
     } catch (err: unknown) {
@@ -683,7 +1475,122 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Password Reset
+  const changeFirstTimePassword = async (
+    newPassword: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!firebaseUser) return { ok: false, error: 'Not authenticated.' };
+    const nowIso = new Date().toISOString().slice(0, 35);
+    try {
+      await updatePassword(firebaseUser, newPassword);
+      const userRef = doc(db, 'users', sanitizeId(firebaseUser.uid));
+      await updateDoc(userRef, {
+        mustChangePassword: false,
+        updatedAt: nowIso,
+      });
+
+      if (firm.id) {
+        try {
+          await updateDoc(doc(db, 'firms', firm.id), {
+            mustChangePassword: false,
+            updatedAt: nowIso,
+          });
+          setFirm((prev) => ({ ...prev, mustChangePassword: false }));
+        } catch {
+          // ignore firm update error if not permitted
+        }
+      }
+
+      setUserProfile((prev) => (prev ? { ...prev, mustChangePassword: false } : prev));
+      return { ok: true };
+    } catch (err: unknown) {
+      return { ok: false, error: formatAuthError(err) };
+    }
+  };
+
+  const createFirmAdmin = async (input: {
+    firmName: string;
+    ownerName: string;
+    email: string;
+    temporaryPassword?: string;
+    manualUid?: string;
+  }): Promise<{ ok: boolean; error?: string; errorType?: string; guidance?: string }> => {
+    if (!firebaseUser) return { ok: false, error: 'Not authenticated as administrator.' };
+    try {
+      const idToken = await firebaseUser.getIdToken();
+      const res = await fetch('/api/admin/firms/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return {
+          ok: false,
+          error: data.error || 'Failed to create firm.',
+          errorType: data.errorType,
+          guidance: data.guidance,
+        };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Network error creating firm.',
+      };
+    }
+  };
+
+  const toggleFirmStatus = async (
+    firmId: string,
+    status: 'active' | 'suspended'
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!firebaseUser) return { ok: false, error: 'Not authenticated as administrator.' };
+    try {
+      const idToken = await firebaseUser.getIdToken();
+      const res = await fetch('/api/admin/firms/status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ firmId, status }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error || 'Failed to update firm status.' };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Network error updating firm status.',
+      };
+    }
+  };
+
+  const updateFirmDetails = async (
+    firmId: string,
+    updates: Partial<Firm>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!firebaseUser) return { ok: false, error: 'Not authenticated as administrator.' };
+    try {
+      const nowIso = new Date().toISOString().slice(0, 35);
+      await updateDoc(doc(db, 'firms', firmId), {
+        ...updates,
+        updatedAt: nowIso,
+      });
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Failed to update firm details.',
+      };
+    }
+  };
+
   const sendPasswordReset = async (email: string): Promise<{ ok: boolean; error?: string }> => {
     try {
       await sendPasswordResetEmail(auth, email.trim());
@@ -693,22 +1600,24 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Google Sign-In with Popup
   const signInWithGoogle = async (
     preferredRole?: UserRole,
-    preferredClientId?: string
+    preferredFirmId?: string
   ): Promise<{ ok: boolean; error?: string }> => {
     setIsSigningIn(true);
     try {
       const result = await signInWithPopup(auth, googleProvider);
       if (result.user) {
-        await ensureFirestoreSeeded(result.user, preferredRole, preferredClientId);
+        await loadOrInitUserSession(result.user, {
+          role: preferredRole,
+          selectedFirmId: preferredFirmId,
+        });
       }
       return { ok: true };
     } catch (err: unknown) {
       const formatted = formatAuthError(err);
       if (!formatted) {
-        return { ok: false }; // User closed popup without error
+        return { ok: false };
       }
       return { ok: false, error: formatted };
     } finally {
@@ -717,40 +1626,8 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const enterWorkspaceAsRole = async (role: UserRole, clientId?: string) => {
-    const targetClientId = clientId || activePortalClientId || clients[0]?.id || 'client_aravind_tex';
     setActiveRole(role);
-    setActivePortalClientId(targetClientId);
-
-    if (firebaseUser && userProfile) {
-      const uid = sanitizeId(firebaseUser.uid);
-      const nowIso = new Date().toISOString().slice(0, 35);
-      try {
-        await updateDoc(doc(db, 'users', uid), {
-          role,
-          clientId: sanitizeId(targetClientId),
-          updatedAt: nowIso,
-        });
-        setUserProfile((prev) =>
-          prev ? { ...prev, role, clientId: sanitizeId(targetClientId), updatedAt: nowIso } : null
-        );
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
-      }
-    } else if (userProfile) {
-      setUserProfile((prev) =>
-        prev
-          ? {
-              ...prev,
-              role,
-              clientId: targetClientId,
-              displayName:
-                role === 'ca'
-                  ? 'CA Vikram Deshmukh'
-                  : clients.find((c) => c.id === targetClientId)?.name || 'Client Finance Team',
-            }
-          : null
-      );
-    }
+    if (clientId) setActivePortalClientId(clientId);
   };
 
   const signOutUser = async () => {
@@ -759,10 +1636,19 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     setFirebaseUser(null);
     setUserProfile(null);
+    setFirm(EMPTY_FIRM);
+    setClients([]);
+    setDocuments([]);
+    setVouchers([]);
+    setVoucherEntries([]);
+    setAiProcessingJobs([]);
+    setClientRequests([]);
+    setAuditEvents([]);
   };
 
   const createClient = async (input: {
     name: string;
+    businessName?: string;
     code: string;
     businessType: string;
     gstin: string;
@@ -770,18 +1656,21 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     financialYear: string;
     contactEmail: string;
   }) => {
-    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : 'demo_ca_user';
+    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : '';
     const nowIso = new Date().toISOString().slice(0, 35);
     const newClient: Client = {
-      id: sanitizeId(`client_${Date.now()}`),
+      id: generateUniqueId('client'),
       ownerUid: uid,
       firmId: firm.id,
+      firmName: firm.name,
       name: input.name.trim().slice(0, 120),
-      code: input.code.trim().toUpperCase().slice(0, 24),
+      businessName: (input.businessName || input.name).trim().slice(0, 120),
+      code: input.code.trim().toUpperCase().slice(0, 24) || 'CL01',
       businessType: input.businessType.trim().slice(0, 60),
-      gstin: input.gstin.trim().toUpperCase().slice(0, 20),
-      pan: input.pan.trim().toUpperCase().slice(0, 16),
-      financialYear: input.financialYear.slice(0, 20),
+      gstin: input.gstin.trim().toUpperCase().slice(0, 20) || 'Pending',
+      pan: input.pan.trim().toUpperCase().slice(0, 16) || 'Pending',
+      financialYear: input.financialYear.slice(0, 20) || '2026-27',
+      membershipStatus: 'APPROVED',
       accountingStatus: 'Up to Date',
       docProcessingStatus: 'Idle',
       tallyStatus: 'Pending Sync',
@@ -797,19 +1686,15 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       clientId: newClient.id,
       accountingMethod: 'Mercantile (Accrual) · Ind AS',
       gstFilingFrequency: 'Monthly (GSTR-1 & GSTR-3B)',
-      reverseChargeDefault: 'GTA & Legal RCM Checks Enabled',
-      historicalBooksStatus: 'Simulated Baseline Initialized',
-      profileCompleteness: 65,
-      aiLearningStatus: 'Simulated Profile Ready (Awaiting Historical Books)',
-      conventionsSummary:
-        'Standard firm chart of accounts applied. Upload prior year Trial Balance or approve initial vouchers to build client-specific ledger memory.',
+      reverseChargeDefault: 'Standard RCM Checks',
+      historicalBooksStatus: 'Awaiting Historical Books',
+      profileCompleteness: 0,
+      aiLearningStatus: 'No Historical Books Uploaded Yet',
+      conventionsSummary: 'No accounting conventions recorded yet.',
       updatedAt: nowIso,
     };
 
-    setClients((prev) => [newClient, ...prev]);
-    setAccountingProfiles((prev) => [newProfile, ...prev]);
-
-    if (firebaseUser) {
+    if (firebaseUser && firm.id) {
       try {
         await setDoc(doc(db, 'clients', newClient.id), newClient);
         await setDoc(doc(db, 'accountingProfiles', newProfile.id), newProfile);
@@ -820,12 +1705,12 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     await appendAuditEvent({
       clientId: newClient.id,
-      clientName: newClient.name,
+      clientName: newClient.businessName || newClient.name,
       financialYear: newClient.financialYear,
       reference: newClient.code,
-      eventType: 'Client Onboarded',
-      actor: userProfile?.displayName || 'CA Vikram Deshmukh',
-      description: `Created client workspace for ${newClient.name} (GSTIN: ${newClient.gstin}).`,
+      eventType: 'Client Created',
+      actor: userProfile?.displayName || firm.ownerName || 'CA Partner',
+      description: `Added client ${newClient.businessName || newClient.name} to firm workspace.`,
     });
 
     return newClient;
@@ -849,6 +1734,124 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  // Client Document Upload Verification (Routes to firm's Google Drive, never stores binaries in Firebase)
+  const verifyAndUploadClientDocument = async (input: {
+    clientId: string;
+    fileName: string;
+    fileType: string;
+    fileSize: string;
+    financialYear: string;
+    period: string;
+    category: DocumentCategory;
+    file?: File;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    targetDrivePath?: string;
+    missingEnvVars?: string[];
+  }> => {
+    if (!firebaseUser || !userProfile) {
+      return { ok: false, error: 'You must be signed in to upload documents.' };
+    }
+
+    if (userProfile.role === 'client' && userProfile.membershipStatus !== 'APPROVED') {
+      return {
+        ok: false,
+        error: 'Document upload is disabled until your CA firm approves your membership request.',
+      };
+    }
+
+    const targetClient =
+      clients.find((c) => c.id === input.clientId) ||
+      clients.find((c) => c.clientUid === firebaseUser.uid);
+
+    const clientDisplayName =
+      targetClient?.businessName ||
+      targetClient?.name ||
+      userProfile.businessName ||
+      userProfile.displayName;
+    const targetFolderPath = `Fenora / Clients / ${clientDisplayName} / ${input.financialYear} / Documents`;
+
+    try {
+      const idToken = await firebaseUser.getIdToken();
+      let res: globalThis.Response;
+      if (input.file) {
+        const formData = new FormData();
+        formData.append('file', input.file);
+        formData.append('firmId', userProfile.firmId);
+        formData.append('clientId', targetClient?.id || userProfile.clientId);
+        formData.append('clientName', clientDisplayName);
+        formData.append('financialYear', input.financialYear);
+        formData.append('fileName', input.fileName);
+        formData.append('fileType', input.fileType);
+        formData.append('fileSize', input.fileSize);
+        formData.append('category', input.category);
+        formData.append('period', input.period);
+        formData.append('membershipStatus', userProfile.membershipStatus || 'APPROVED');
+        formData.append('uploadedByRole', userProfile.role || 'client');
+        formData.append('clientUid', firebaseUser.uid);
+
+        res = await fetch('/api/drive/upload', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: formData,
+        });
+      } else {
+        res = await fetch('/api/drive/upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            firmId: userProfile.firmId,
+            clientId: targetClient?.id || userProfile.clientId,
+            clientName: clientDisplayName,
+            clientUid: firebaseUser.uid,
+            financialYear: input.financialYear,
+            fileName: input.fileName,
+            fileType: input.fileType,
+            fileSize: input.fileSize,
+            category: input.category,
+            period: input.period,
+            membershipStatus: userProfile.membershipStatus || 'APPROVED',
+            uploadedByRole: userProfile.role || 'client',
+          }),
+        });
+      }
+
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        return {
+          ok: false,
+          error:
+            data.error ||
+            'Upload requires an active CA firm Google Drive connection on the backend.',
+          targetDrivePath: data.targetDrivePath || `${targetFolderPath} / ${input.fileName}`,
+          missingEnvVars: data.missingEnvVars,
+        };
+      }
+
+      if (data.document) {
+        setDocuments((prev) => [data.document, ...prev.filter((d) => d.id !== data.document.id)]);
+      }
+
+      return {
+        ok: true,
+        targetDrivePath: data.targetDrivePath || `${targetFolderPath} / ${input.fileName}`,
+      };
+    } catch {
+      return {
+        ok: false,
+        error: 'Backend Google Drive upload service is not connected.',
+        targetDrivePath: `${targetFolderPath} / ${input.fileName}`,
+      };
+    }
+  };
+
   const uploadDocument = async (input: {
     clientId: string;
     fileName: string;
@@ -860,20 +1863,25 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     vendorOrParty?: string;
     totalAmount?: number;
   }) => {
-    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : 'demo_ca_user';
-    const targetClient = clients.find((c) => c.id === input.clientId) || clients[0];
+    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : '';
+    const targetClient = clients.find((c) => c.id === input.clientId);
+    if (!targetClient) {
+      throw new Error('Select a registered client before uploading.');
+    }
+
     const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
     const nowIso = new Date().toISOString().slice(0, 35);
-
-    const baseAmount = input.totalAmount && input.totalAmount > 0 ? input.totalAmount : 118000;
-    const taxAmt = Math.round((baseAmount * 18) / 118);
+    const baseAmount = input.totalAmount && input.totalAmount > 0 ? input.totalAmount : 0;
+    const taxAmt = baseAmount > 0 ? Math.round((baseAmount * 18) / 118) : 0;
+    const folderPath = `Fenora / Clients / ${targetClient.businessName || targetClient.name} / ${input.financialYear} / Documents`;
 
     const newDoc: AccountingDocument = {
-      id: sanitizeId(`doc_${Date.now()}`),
-      ownerUid: uid,
-      firmId: firm.id,
+      id: generateUniqueId('doc'),
+      ownerUid: targetClient.ownerUid || uid,
+      ...(targetClient.clientUid ? { clientUid: targetClient.clientUid } : {}),
+      firmId: targetClient.firmId,
       clientId: targetClient.id,
-      clientName: targetClient.name.slice(0, 120),
+      clientName: (targetClient.businessName || targetClient.name).slice(0, 120),
       fileName: input.fileName.trim().slice(0, 180),
       fileType: input.fileType.toUpperCase().slice(0, 20),
       fileSize: input.fileSize.slice(0, 30),
@@ -885,33 +1893,31 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       extractionStatus: 'Pending',
       accountingStatus: 'Unprocessed',
       confidence: 0,
-      vendorOrParty: (input.vendorOrParty || 'Vendor Partner').slice(0, 120),
-      invoiceNumber: `INV/${input.financialYear.slice(0, 4)}/${Math.floor(1000 + Math.random() * 9000)}`,
+      vendorOrParty: (input.vendorOrParty || 'Unverified Party').slice(0, 120),
+      invoiceNumber: 'Pending Extraction',
       invoiceDate: new Date().toISOString().slice(0, 10),
       totalAmount: baseAmount,
       taxAmount: taxAmt,
-      gstin: targetClient.gstin || '27AABCS8812G1Z3',
+      gstin: targetClient.gstin || 'Pending',
+      driveFolderPath: folderPath.slice(0, 260),
       uploadedByRole: activeRole,
       updatedAt: nowIso,
     };
 
     const newJob: AIProcessingJob = {
-      id: sanitizeId(`job_${Date.now()}`),
-      ownerUid: uid,
-      firmId: firm.id,
+      id: generateUniqueId('job'),
+      ownerUid: targetClient.ownerUid || uid,
+      firmId: targetClient.firmId,
       clientId: targetClient.id,
       documentId: newDoc.id,
       documentName: newDoc.fileName,
-      clientName: targetClient.name.slice(0, 120),
+      clientName: (targetClient.businessName || targetClient.name).slice(0, 120),
       stage: 'Queued',
       confidence: 0,
-      validationSummary: 'Queued for simulated OCR layout extraction and ledger rule matching.',
+      validationSummary: 'Queued for n8n & AI processing pipeline.',
       startedAt: nowStr,
       updatedAt: nowIso,
     };
-
-    setDocuments((prev) => [newDoc, ...prev]);
-    setAiProcessingJobs((prev) => [newJob, ...prev]);
 
     if (firebaseUser) {
       try {
@@ -922,170 +1928,11 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     }
 
-    await appendAuditEvent({
-      clientId: targetClient.id,
-      clientName: targetClient.name,
-      financialYear: newDoc.financialYear,
-      reference: newDoc.fileName,
-      eventType: 'Document Uploaded',
-      actor: activeRole === 'client' ? `Client (${targetClient.name})` : 'CA Firm Staff',
-      description: `Uploaded ${newDoc.category} (${newDoc.fileName}) for ${newDoc.period}.`,
-    });
-
     return newDoc;
   };
 
-  const triggerAIProcessingForDoc = async (docId: string) => {
-    const targetDoc = documents.find((d) => d.id === docId);
-    if (!targetDoc) return;
-
-    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : 'demo_ca_user';
-    const nowIso = new Date().toISOString().slice(0, 35);
-    const confidence = 96;
-    const totalAmt = targetDoc.totalAmount || 118000;
-    const taxAmt = targetDoc.taxAmount || Math.round((totalAmt * 18) / 118);
-    const taxableAmt = totalAmt - taxAmt;
-
-    const docUpdates = {
-      processingStatus: 'Completed' as const,
-      extractionStatus: 'Extracted' as const,
-      accountingStatus: 'Voucher Drafted' as const,
-      confidence,
-      updatedAt: nowIso,
-    };
-
-    setDocuments((prev) =>
-      prev.map((d) => (d.id === docId ? { ...d, ...docUpdates } : d))
-    );
-
-    if (firebaseUser) {
-      try {
-        await updateDoc(doc(db, 'documents', docId), docUpdates);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `documents/${docId}`);
-      }
-    }
-
-    const existingJob = aiProcessingJobs.find((j) => j.documentId === docId);
-    if (existingJob) {
-      const jobUpdates = {
-        stage: 'Completed' as const,
-        confidence,
-        validationSummary: `Extracted GSTIN ${targetDoc.gstin}, Taxable ₹${taxableAmt.toLocaleString('en-IN')}, GST ₹${taxAmt.toLocaleString('en-IN')}.`,
-        updatedAt: nowIso,
-      };
-      setAiProcessingJobs((prev) =>
-        prev.map((j) => (j.id === existingJob.id ? { ...j, ...jobUpdates } : j))
-      );
-      if (firebaseUser) {
-        try {
-          await updateDoc(doc(db, 'aiProcessingJobs', existingJob.id), jobUpdates);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.UPDATE, `aiProcessingJobs/${existingJob.id}`);
-        }
-      }
-    }
-
-    const existingVoucher = vouchers.find((v) => v.sourceDocumentId === docId);
-    if (!existingVoucher) {
-      const isSales = targetDoc.category === 'Sales Invoice';
-      const vType: VoucherType = isSales
-        ? 'Sales'
-        : targetDoc.category === 'Credit Note'
-        ? 'Credit Note'
-        : targetDoc.category === 'Debit Note'
-        ? 'Debit Note'
-        : targetDoc.category === 'Payment Receipt'
-        ? 'Receipt'
-        : 'Purchase';
-
-      const newVoucher: Voucher = {
-        id: sanitizeId(`vch_${Date.now()}`),
-        ownerUid: uid,
-        firmId: firm.id,
-        clientId: targetDoc.clientId,
-        clientName: targetDoc.clientName,
-        financialYear: targetDoc.financialYear,
-        voucherDate: targetDoc.invoiceDate,
-        voucherType: vType,
-        voucherNumber: `${vType.slice(0, 3).toUpperCase()}/26-27/${Math.floor(100 + Math.random() * 899)}`,
-        sourceDocumentId: targetDoc.id,
-        sourceDocumentName: targetDoc.fileName,
-        partyLedger: targetDoc.vendorOrParty,
-        primaryLedger: isSales ? 'Local Sales - Taxable (18%)' : 'Purchase - Raw Materials & Inputs (18%)',
-        taxLedger: isSales ? 'Output CGST & SGST @ 18%' : 'Input IGST / CGST-SGST @ 18%',
-        totalDebit: totalAmt,
-        totalCredit: totalAmt,
-        narration: `Being ${targetDoc.category} booked vide ${targetDoc.invoiceNumber} dated ${targetDoc.invoiceDate} from ${targetDoc.vendorOrParty}.`,
-        aiExplanation: `Simulated AI extraction matched ${targetDoc.vendorOrParty} (${targetDoc.gstin}) and verified 18% GST computation.`,
-        aiConfidence: confidence,
-        validationStatus: 'Valid',
-        approvalStatus: 'Pending Review',
-        caLocked: false,
-        tallySyncStatus: 'Pending',
-        updatedAt: nowIso,
-      };
-
-      const entry1: VoucherEntry = {
-        id: sanitizeId(`ve_${Date.now()}_1`),
-        ownerUid: uid,
-        firmId: firm.id,
-        clientId: targetDoc.clientId,
-        voucherId: newVoucher.id,
-        ledgerName: isSales ? newVoucher.partyLedger : newVoucher.primaryLedger,
-        ledgerGroup: isSales ? 'Sundry Debtors' : 'Purchase Accounts',
-        entryType: 'Dr',
-        amount: isSales ? totalAmt : taxableAmt,
-      };
-
-      const entry2: VoucherEntry = {
-        id: sanitizeId(`ve_${Date.now()}_2`),
-        ownerUid: uid,
-        firmId: firm.id,
-        clientId: targetDoc.clientId,
-        voucherId: newVoucher.id,
-        ledgerName: newVoucher.taxLedger,
-        ledgerGroup: 'Duties and Taxes',
-        entryType: isSales ? 'Cr' : 'Dr',
-        amount: taxAmt,
-      };
-
-      const entry3: VoucherEntry = {
-        id: sanitizeId(`ve_${Date.now()}_3`),
-        ownerUid: uid,
-        firmId: firm.id,
-        clientId: targetDoc.clientId,
-        voucherId: newVoucher.id,
-        ledgerName: isSales ? newVoucher.primaryLedger : newVoucher.partyLedger,
-        ledgerGroup: isSales ? 'Sales Accounts' : 'Sundry Creditors',
-        entryType: 'Cr',
-        amount: isSales ? taxableAmt : totalAmt,
-      };
-
-      setVouchers((prev) => [newVoucher, ...prev]);
-      setVoucherEntries((prev) => [...prev, entry1, entry2, entry3]);
-
-      if (firebaseUser) {
-        try {
-          await setDoc(doc(db, 'vouchers', newVoucher.id), newVoucher);
-          await setDoc(doc(db, 'voucherEntries', entry1.id), entry1);
-          await setDoc(doc(db, 'voucherEntries', entry2.id), entry2);
-          await setDoc(doc(db, 'voucherEntries', entry3.id), entry3);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.CREATE, `vouchers/${newVoucher.id}`);
-        }
-      }
-
-      await appendAuditEvent({
-        clientId: targetDoc.clientId,
-        clientName: targetDoc.clientName,
-        financialYear: targetDoc.financialYear,
-        reference: newVoucher.voucherNumber,
-        eventType: 'AI Processing & Voucher Created',
-        actor: 'Fenora Simulated AI Engine',
-        description: `Processed ${targetDoc.fileName} (${confidence}% confidence) and drafted balanced ${vType} voucher ${newVoucher.voucherNumber}.`,
-      });
-    }
+  const triggerAIProcessingForDoc = async (_docId: string) => {
+    // No fake AI completion results are fabricated per strict zero-state rules
   };
 
   const createLedgerAccount = async (input: {
@@ -1099,55 +1946,39 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     financialYear: string;
     aiSuggestedKeywords: string;
   }) => {
-    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : 'demo_ca_user';
-    const targetClient = clients.find((c) => c.id === input.clientId) || clients[0];
+    if (!firebaseUser || !firm.id) return;
+    const uid = sanitizeId(firebaseUser.uid);
+    const targetClient = clients.find((c) => c.id === input.clientId);
+    if (!targetClient) return;
     const nowIso = new Date().toISOString().slice(0, 35);
 
     const newLedger: LedgerAccount = {
-      id: sanitizeId(`ldg_${Date.now()}`),
+      id: generateUniqueId('ldg'),
       ownerUid: uid,
       firmId: firm.id,
       clientId: targetClient.id,
-      clientName: targetClient.name.slice(0, 120),
+      clientName: (targetClient.businessName || targetClient.name).slice(0, 120),
       name: input.name.trim().slice(0, 120),
       group: input.group,
       openingBalance: Number(input.openingBalance) || 0,
       balanceType: input.balanceType,
       gstApplicable: input.gstApplicable,
-      gstin: input.gstin.trim().toUpperCase().slice(0, 20),
+      gstin: input.gstin.trim().toUpperCase().slice(0, 20) || 'NA',
       financialYear: input.financialYear.slice(0, 20),
       tallySyncStatus: 'Pending',
       aiSuggestedKeywords: input.aiSuggestedKeywords.trim().slice(0, 200),
       updatedAt: nowIso,
     };
 
-    setLedgerAccounts((prev) => [newLedger, ...prev]);
-
-    if (firebaseUser) {
-      try {
-        await setDoc(doc(db, 'ledgerAccounts', newLedger.id), newLedger);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, `ledgerAccounts/${newLedger.id}`);
-      }
+    try {
+      await setDoc(doc(db, 'ledgerAccounts', newLedger.id), newLedger);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `ledgerAccounts/${newLedger.id}`);
     }
-
-    await appendAuditEvent({
-      clientId: targetClient.id,
-      clientName: targetClient.name,
-      financialYear: newLedger.financialYear,
-      reference: newLedger.name,
-      eventType: 'Ledger Master Created',
-      actor: userProfile?.displayName || 'CA Vikram Deshmukh',
-      description: `Added ledger "${newLedger.name}" under group ${newLedger.group}.`,
-    });
   };
 
   const updateLedgerAccount = async (ledgerId: string, updates: Partial<LedgerAccount>) => {
     const nowIso = new Date().toISOString().slice(0, 35);
-    setLedgerAccounts((prev) =>
-      prev.map((l) => (l.id === ledgerId ? { ...l, ...updates, updatedAt: nowIso } : l))
-    );
-
     if (firebaseUser) {
       try {
         await updateDoc(doc(db, 'ledgerAccounts', ledgerId), {
@@ -1171,13 +2002,20 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       primaryLedger: string;
       taxLedger: string;
       narration: string;
-      entries: { id: string; ledgerName: string; ledgerGroup: string; entryType: 'Dr' | 'Cr'; amount: number }[];
+      entries: {
+        id: string;
+        ledgerName: string;
+        ledgerGroup: string;
+        entryType: 'Dr' | 'Cr';
+        amount: number;
+      }[];
     }
   ): Promise<{ ok: boolean; error?: string }> => {
     const targetVoucher = vouchers.find((v) => v.id === voucherId);
     if (!targetVoucher) return { ok: false, error: 'Voucher not found.' };
+    if (!firebaseUser) return { ok: false, error: 'Not authenticated.' };
 
-    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : 'demo_ca_user';
+    const uid = sanitizeId(firebaseUser.uid);
     const nowIso = new Date().toISOString().slice(0, 35);
 
     let totalDebit = targetVoucher.totalDebit;
@@ -1195,7 +2033,6 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     const isBalanced = Math.abs(totalDebit - totalCredit) < 0.01 && totalDebit > 0;
-
     if (decision === 'CA Approved' && !isBalanced) {
       return {
         ok: false,
@@ -1203,91 +2040,46 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
     }
 
-    const newValidationStatus: 'Valid' | 'Imbalanced' | 'GST Warning' = isBalanced
-      ? 'Valid'
-      : 'Imbalanced';
-
     const voucherUpdates = {
-      voucherDate: editedVoucher ? editedVoucher.voucherDate.slice(0, 30) : targetVoucher.voucherDate,
+      voucherDate: editedVoucher
+        ? editedVoucher.voucherDate.slice(0, 30)
+        : targetVoucher.voucherDate,
       voucherType: editedVoucher ? editedVoucher.voucherType : targetVoucher.voucherType,
-      partyLedger: editedVoucher ? editedVoucher.partyLedger.slice(0, 120) : targetVoucher.partyLedger,
-      primaryLedger: editedVoucher ? editedVoucher.primaryLedger.slice(0, 120) : targetVoucher.primaryLedger,
+      partyLedger: editedVoucher
+        ? editedVoucher.partyLedger.slice(0, 120)
+        : targetVoucher.partyLedger,
+      primaryLedger: editedVoucher
+        ? editedVoucher.primaryLedger.slice(0, 120)
+        : targetVoucher.primaryLedger,
       taxLedger: editedVoucher ? editedVoucher.taxLedger.slice(0, 120) : targetVoucher.taxLedger,
       narration: editedVoucher ? editedVoucher.narration.slice(0, 400) : targetVoucher.narration,
       totalDebit,
       totalCredit,
-      validationStatus: newValidationStatus,
+      validationStatus: (isBalanced ? 'Valid' : 'Imbalanced') as 'Valid' | 'Imbalanced',
       approvalStatus: decision,
       caLocked: decision === 'CA Approved',
       updatedAt: nowIso,
     };
 
-    setVouchers((prev) =>
-      prev.map((v) => (v.id === voucherId ? { ...v, ...voucherUpdates } : v))
-    );
-
-    if (editedVoucher) {
-      setVoucherEntries((prev) => {
-        const others = prev.filter((e) => e.voucherId !== voucherId);
-        const updatedLines: VoucherEntry[] = editedVoucher.entries.map((line) => ({
-          id: sanitizeId(line.id),
-          ownerUid: uid,
-          firmId: firm.id,
-          clientId: targetVoucher.clientId,
-          voucherId,
-          ledgerName: line.ledgerName.slice(0, 120),
-          ledgerGroup: line.ledgerGroup.slice(0, 60),
-          entryType: line.entryType,
-          amount: Number(line.amount),
-        }));
-        return [...others, ...updatedLines];
-      });
-    }
-
-    if (decision === 'CA Approved') {
-      setDocuments((prev) =>
-        prev.map((d) =>
-          d.id === targetVoucher.sourceDocumentId
-            ? { ...d, accountingStatus: 'CA Approved', updatedAt: nowIso }
-            : d
-        )
-      );
-    }
-
     const approvalRecord: CAApproval = {
-      id: sanitizeId(`app_${Date.now()}`),
+      id: generateUniqueId('app'),
       ownerUid: uid,
       firmId: firm.id,
       clientId: targetVoucher.clientId,
       voucherId,
-      reviewerName: (userProfile?.displayName || 'CA Vikram Deshmukh').slice(0, 100),
+      reviewerName: (userProfile?.displayName || firm.ownerName || 'CA Partner').slice(0, 100),
       decision: wasEdited && decision === 'CA Approved' ? 'Edited & Approved' : decision,
       notes: (notes || `Marked as ${decision}`).slice(0, 300),
       decidedAt: nowIso,
     };
 
-    setCaApprovals((prev) => [approvalRecord, ...prev]);
-
-    if (firebaseUser) {
-      try {
-        await updateDoc(doc(db, 'vouchers', voucherId), voucherUpdates);
-        await setDoc(doc(db, 'caApprovals', approvalRecord.id), approvalRecord);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `vouchers/${voucherId}`);
-      }
+    try {
+      await updateDoc(doc(db, 'vouchers', voucherId), voucherUpdates);
+      await setDoc(doc(db, 'caApprovals', approvalRecord.id), approvalRecord);
+      return { ok: true };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `vouchers/${voucherId}`);
     }
-
-    await appendAuditEvent({
-      clientId: targetVoucher.clientId,
-      clientName: targetVoucher.clientName,
-      financialYear: targetVoucher.financialYear,
-      reference: targetVoucher.voucherNumber,
-      eventType: wasEdited ? `CA Corrected & ${decision}` : `CA Decision: ${decision}`,
-      actor: userProfile?.displayName || 'CA Vikram Deshmukh',
-      description: `${wasEdited ? 'Modified AI lines and set status to ' : 'Set status to '}${decision} on ${targetVoucher.voucherNumber}.`,
-    });
-
-    return { ok: true };
   };
 
   const updateAccountingProfile = async (
@@ -1295,27 +2087,21 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     updates: Partial<AccountingProfile>
   ) => {
     const target = accountingProfiles.find((p) => p.clientId === clientId);
-    if (!target) return;
+    if (!target || !firebaseUser) return;
     const nowIso = new Date().toISOString().slice(0, 35);
-
-    setAccountingProfiles((prev) =>
-      prev.map((p) => (p.id === target.id ? { ...p, ...updates, updatedAt: nowIso } : p))
-    );
-
-    if (firebaseUser) {
-      try {
-        await updateDoc(doc(db, 'accountingProfiles', target.id), {
-          ...updates,
-          updatedAt: nowIso,
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `accountingProfiles/${target.id}`);
-      }
+    try {
+      await updateDoc(doc(db, 'accountingProfiles', target.id), {
+        ...updates,
+        updatedAt: nowIso,
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `accountingProfiles/${target.id}`);
     }
   };
 
   const generateTallyXmlForClient = async (clientId: string, financialYear: string) => {
-    const targetClient = clients.find((c) => c.id === clientId) || clients[0];
+    const targetClient = clients.find((c) => c.id === clientId);
+    const companyName = targetClient?.businessName || targetClient?.name || firm.name || 'Fenora Client';
     const approvedVouchers = vouchers.filter(
       (v) =>
         (clientId === 'all' || v.clientId === clientId) &&
@@ -1349,8 +2135,7 @@ ${ledgerEntriesXml}
       })
       .join('\n');
 
-    const xmlEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
-<!-- Generated by Fenora Accounting Automation Platform (Simulated TallyPrime v4.0 Envelope) -->
+    return `<?xml version="1.0" encoding="UTF-8"?>
 <ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Import Data</TALLYREQUEST>
@@ -1360,88 +2145,19 @@ ${ledgerEntriesXml}
       <REQUESTDESC>
         <REPORTNAME>Vouchers</REPORTNAME>
         <STATICVARIABLES>
-          <SVCURRENTCOMPANY>${targetClient.name.replace(/&/g, '&amp;')} (${financialYear})</SVCURRENTCOMPANY>
+          <SVCURRENTCOMPANY>${companyName.replace(/&/g, '&amp;')} (${financialYear})</SVCURRENTCOMPANY>
         </STATICVARIABLES>
       </REQUESTDESC>
       <REQUESTDATA>
-${xmlVouchers || '      <!-- No CA-Approved Vouchers Pending Export -->'}
+${xmlVouchers || '      <!-- No CA-Approved Vouchers Available for Export -->'}
       </REQUESTDATA>
     </IMPORTDATA>
   </BODY>
 </ENVELOPE>`;
-
-    await appendAuditEvent({
-      clientId: targetClient.id,
-      clientName: targetClient.name,
-      financialYear,
-      reference: `XML-${Date.now().toString().slice(-6)}`,
-      eventType: 'Tally XML Generated',
-      actor: userProfile?.displayName || 'CA Vikram Deshmukh',
-      description: `Generated TallyPrime XML envelope containing ${approvedVouchers.length} CA-approved vouchers for ${targetClient.name}.`,
-    });
-
-    return xmlEnvelope;
   };
 
-  const simulateTallyImportForClient = async (clientId: string, financialYear: string) => {
-    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : 'demo_ca_user';
-    const targetClient = clients.find((c) => c.id === clientId) || clients[0];
-    const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
-    const nowIso = new Date().toISOString().slice(0, 35);
-
-    const eligibleVouchers = vouchers.filter(
-      (v) =>
-        (clientId === 'all' || v.clientId === clientId) &&
-        v.approvalStatus === 'CA Approved' &&
-        v.validationStatus === 'Valid'
-    );
-
-    const newJob: TallySyncJob = {
-      id: sanitizeId(`tsync_${Date.now()}`),
-      ownerUid: uid,
-      firmId: firm.id,
-      clientId: targetClient.id,
-      clientName: targetClient.name.slice(0, 120),
-      tallyCompany: `${targetClient.name.slice(0, 90)} (FY ${financialYear})`,
-      financialYear: financialYear.slice(0, 20),
-      vouchersCount: eligibleVouchers.length || 1,
-      status: 'Simulated Import Success',
-      summary: `Simulated TallyPrime XML import completed: ${eligibleVouchers.length || 1} CA-approved voucher(s) synchronized with zero duplicate voucher numbers.`,
-      syncedAt: nowStr,
-    };
-
-    setTallySyncJobs((prev) => [newJob, ...prev]);
-    setVouchers((prev) =>
-      prev.map((v) =>
-        eligibleVouchers.some((ev) => ev.id === v.id)
-          ? { ...v, tallySyncStatus: 'Imported', updatedAt: nowIso }
-          : v
-      )
-    );
-
-    if (firebaseUser) {
-      try {
-        await setDoc(doc(db, 'tallySyncJobs', newJob.id), newJob);
-        for (const v of eligibleVouchers) {
-          await updateDoc(doc(db, 'vouchers', v.id), {
-            tallySyncStatus: 'Imported',
-            updatedAt: nowIso,
-          });
-        }
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, `tallySyncJobs/${newJob.id}`);
-      }
-    }
-
-    await appendAuditEvent({
-      clientId: targetClient.id,
-      clientName: targetClient.name,
-      financialYear,
-      reference: newJob.id,
-      eventType: 'Tally Import Completed (Simulated)',
-      actor: userProfile?.displayName || 'CA Vikram Deshmukh',
-      description: `Simulated TallyPrime import succeeded for ${eligibleVouchers.length || 1} CA-approved vouchers in ${targetClient.name}.`,
-    });
+  const simulateTallyImportForClient = async (_clientId: string, _financialYear: string) => {
+    // Strictly no simulated Tally import jobs created when no approved vouchers exist
   };
 
   const createClientRequest = async (input: {
@@ -1451,69 +2167,67 @@ ${xmlVouchers || '      <!-- No CA-Approved Vouchers Pending Export -->'}
     category: string;
     message: string;
   }) => {
-    const uid = firebaseUser ? sanitizeId(firebaseUser.uid) : 'demo_ca_user';
-    const targetClient = clients.find((c) => c.id === input.clientId) || clients[0];
+    if (!firebaseUser || !firm.id) return;
+    const uid = sanitizeId(firebaseUser.uid);
+    const targetClient = clients.find((c) => c.id === input.clientId);
+    if (!targetClient) return;
     const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
 
     const newReq: ClientRequest = {
-      id: sanitizeId(`req_${Date.now()}`),
-      ownerUid: uid,
+      id: generateUniqueId('req'),
+      ownerUid: firm.ownerUid || uid,
+      ...(targetClient.clientUid ? { clientUid: targetClient.clientUid } : {}),
       firmId: firm.id,
       clientId: targetClient.id,
-      clientName: targetClient.name.slice(0, 120),
+      clientName: (targetClient.businessName || targetClient.name).slice(0, 120),
+      businessName: (targetClient.businessName || targetClient.name).slice(0, 120),
+      email: targetClient.contactEmail,
       financialYear: input.financialYear.slice(0, 20),
       title: input.title.trim().slice(0, 150),
       category: input.category.slice(0, 50),
+      requestType: 'DOCUMENT',
       status: activeRole === 'ca' ? 'Pending Client' : 'Submitted',
       senderRole: activeRole,
       message: input.message.trim().slice(0, 400),
+      requestedAt: nowStr,
       updatedAt: nowStr,
     };
 
-    setClientRequests((prev) => [newReq, ...prev]);
-
-    if (firebaseUser) {
-      try {
-        await setDoc(doc(db, 'clientRequests', newReq.id), newReq);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, `clientRequests/${newReq.id}`);
-      }
+    try {
+      await setDoc(doc(db, 'clientRequests', newReq.id), newReq);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `clientRequests/${newReq.id}`);
     }
   };
 
   const updateClientRequestStatus = async (
     reqId: string,
-    status: 'Pending Client' | 'Submitted' | 'Resolved',
+    status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'Pending Client' | 'Submitted' | 'Resolved',
     replyMessage?: string
   ) => {
     const target = clientRequests.find((r) => r.id === reqId);
-    if (!target) return;
+    if (!target || !firebaseUser) return;
     const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
     const updatedMsg = replyMessage
       ? `${target.message} — Reply: ${replyMessage}`.slice(0, 400)
       : target.message;
 
-    setClientRequests((prev) =>
-      prev.map((r) =>
-        r.id === reqId
-          ? { ...r, status, senderRole: activeRole, message: updatedMsg, updatedAt: nowStr }
-          : r
-      )
-    );
-
-    if (firebaseUser) {
-      try {
-        await updateDoc(doc(db, 'clientRequests', reqId), {
-          status,
-          senderRole: activeRole,
-          message: updatedMsg,
-          updatedAt: nowStr,
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `clientRequests/${reqId}`);
-      }
+    try {
+      await updateDoc(doc(db, 'clientRequests', reqId), {
+        status,
+        senderRole: activeRole,
+        message: updatedMsg,
+        updatedAt: nowStr,
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `clientRequests/${reqId}`);
     }
   };
+
+  // Approved clients list for CA firm
+  const approvedClients = clients.filter(
+    (c) => !c.membershipStatus || c.membershipStatus === 'APPROVED'
+  );
 
   return (
     <FenoraContext.Provider
@@ -1525,7 +2239,11 @@ ${xmlVouchers || '      <!-- No CA-Approved Vouchers Pending Export -->'}
         activeRole,
         activePortalClientId,
         firm,
+        directoryFirms,
+        allFirms,
+        driveStatus,
         clients,
+        approvedClients,
         financialYears,
         documents,
         accountingProfiles,
@@ -1539,15 +2257,30 @@ ${xmlVouchers || '      <!-- No CA-Approved Vouchers Pending Export -->'}
         auditEvents,
         clientRequests,
         gstReconciliation,
+        setActiveRole,
+        setActivePortalClientId,
+        enterWorkspaceAsRole,
+        signInWithGoogle,
         signInWithEmail,
         signUpWithEmail,
+        completeCAFirmSetup,
+        completeClientFirmSelection,
+        approveClientMembership,
+        rejectClientMembership,
+        refreshDriveStatus,
+        connectGoogleDrive,
+        disconnectGoogleDrive,
+        completeDriveOnboarding,
         sendPasswordReset,
-        signInWithGoogle,
-        enterWorkspaceAsRole,
+        changeFirstTimePassword,
+        createFirmAdmin,
+        toggleFirmStatus,
+        updateFirmDetails,
         signOutUser,
         createClient,
         updateClient,
         uploadDocument,
+        verifyAndUploadClientDocument,
         triggerAIProcessingForDoc,
         createLedgerAccount,
         updateLedgerAccount,
@@ -1564,10 +2297,10 @@ ${xmlVouchers || '      <!-- No CA-Approved Vouchers Pending Export -->'}
   );
 };
 
-export function useFenora() {
+export function useFenora(): FenoraContextValue {
   const ctx = useContext(FenoraContext);
   if (!ctx) {
-    throw new Error('useFenora must be used inside FenoraProvider');
+    throw new Error('useFenora must be used inside a FenoraProvider');
   }
   return ctx;
 }

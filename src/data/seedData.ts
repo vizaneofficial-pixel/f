@@ -1089,6 +1089,20 @@ export function buildInitialSeedData(ownerUid: string) {
       message: 'The rubber stamp covers the ₹3,000 port wharfage line item on Invoice MCPL/26-27/3319. Please upload the original PDF.',
       updatedAt: '2026-11-07 09:25',
     },
+    {
+      id: 'req_04_onboarding',
+      ownerUid,
+      firmId,
+      clientId: 'pending',
+      clientName: 'Rajan Mehta (Sunrise Garments Pvt Ltd)',
+      financialYear: '2026-27',
+      title: 'New Client Onboarding: Sunrise Garments Pvt Ltd',
+      category: 'Client Onboarding',
+      status: 'Pending Client',
+      senderRole: 'client',
+      message: 'Registered new client organization Sunrise Garments Pvt Ltd (Email: rajan@sunrisegarments.in · Pan: AAGCS1102K). Awaiting CA firm workspace approval and linking.',
+      updatedAt: '2026-11-08 09:15',
+    },
   ];
 
   return {

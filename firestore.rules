@@ -32,17 +32,48 @@ service cloud.firestore {
       return resource.data;
     }
 
+    function isAdmin() {
+      return isSignedIn()
+        && (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+          || (request.auth.token.email == 'relaxingsoundsformeditation@gmail.com')
+        );
+    }
+
+    function isFirmActive(firmId) {
+      return isValidId(firmId)
+        && exists(/databases/$(database)/documents/firms/$(firmId))
+        && (
+          !('status' in get(/databases/$(database)/documents/firms/$(firmId)).data)
+          || get(/databases/$(database)/documents/firms/$(firmId)).data.status == 'active'
+        )
+        && (
+          !('active' in get(/databases/$(database)/documents/firms/$(firmId)).data)
+          || get(/databases/$(database)/documents/firms/$(firmId)).data.active == true
+        );
+    }
+
+    function isFirmOwner(firmId) {
+      return isSignedIn()
+        && isValidId(firmId)
+        && exists(/databases/$(database)/documents/firms/$(firmId))
+        && get(/databases/$(database)/documents/firms/$(firmId)).data.ownerUid == request.auth.uid;
+    }
+
     // 3. Entity Validation Blueprints (Synchronized with firebase-blueprint.json)
 
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'firmId', 'clientId', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'firmId', 'clientId', 'createdAt', 'updatedAt', 'businessName'])
-        && data.uid == request.auth.uid
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'fullName', 'role', 'firmId', 'clientId', 'createdAt', 'updatedAt', 'businessName', 'contactPhone', 'membershipStatus', 'mustChangePassword'])
         && isValidId(data.uid)
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 120
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 100))
         && (!('businessName' in data) || (data.businessName is string && data.businessName.size() <= 120))
-        && data.role is string && data.role.size() <= 20 && data.role in ['ca', 'client']
+        && (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 40))
+        && (!('membershipStatus' in data) || (data.membershipStatus is string && data.membershipStatus in ['PENDING', 'APPROVED', 'REJECTED']))
+        && (!('mustChangePassword' in data) || data.mustChangePassword is bool)
+        && data.role is string && data.role.size() <= 20 && data.role in ['ca', 'client', 'firm_owner', 'super_admin']
         && isValidId(data.firmId)
         && isValidId(data.clientId)
         && data.createdAt is string && data.createdAt.size() <= 40
@@ -51,31 +82,47 @@ service cloud.firestore {
 
     function isValidFirm(data) {
       return data.keys().hasAll(['id', 'ownerUid', 'name', 'registrationNo', 'gstin', 'city', 'defaultFinancialYear', 'createdAt'])
-        && data.keys().hasOnly(['id', 'ownerUid', 'name', 'registrationNo', 'gstin', 'city', 'defaultFinancialYear', 'createdAt'])
+        && data.keys().hasOnly(['id', 'firmId', 'ownerUid', 'name', 'firmName', 'ownerName', 'email', 'contactPhone', 'registrationNo', 'gstin', 'city', 'defaultFinancialYear', 'role', 'status', 'mustChangePassword', 'driveConnected', 'driveEmail', 'driveOnboardingCompleted', 'active', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
-        && data.ownerUid == request.auth.uid
+        && (data.ownerUid == request.auth.uid || isAdmin())
         && isValidId(data.ownerUid)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && (!('firmId' in data) || (isValidId(data.firmId) && data.firmId == data.id))
+        && (!('firmName' in data) || (data.firmName is string && data.firmName.size() <= 120))
+        && (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 100))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 120))
+        && (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 40))
         && data.registrationNo is string && data.registrationNo.size() <= 40
         && data.gstin is string && data.gstin.size() <= 20
         && data.city is string && data.city.size() <= 60
         && data.defaultFinancialYear is string && data.defaultFinancialYear.size() <= 20
-        && data.createdAt is string && data.createdAt.size() <= 40;
+        && (!('role' in data) || (data.role is string && data.role in ['firm_owner', 'ca']))
+        && (!('status' in data) || (data.status is string && data.status in ['active', 'suspended']))
+        && (!('mustChangePassword' in data) || data.mustChangePassword is bool)
+        && (!('driveConnected' in data) || data.driveConnected is bool)
+        && (!('driveEmail' in data) || (data.driveEmail is string && data.driveEmail.size() <= 120))
+        && (!('driveOnboardingCompleted' in data) || data.driveOnboardingCompleted is bool)
+        && (!('active' in data) || data.active is bool)
+        && data.createdAt is string && data.createdAt.size() <= 40
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
     function isValidClient(data) {
       return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'name', 'code', 'businessType', 'gstin', 'pan', 'financialYear', 'accountingStatus', 'docProcessingStatus', 'tallyStatus', 'contactEmail', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'name', 'code', 'businessType', 'gstin', 'pan', 'financialYear', 'accountingStatus', 'docProcessingStatus', 'tallyStatus', 'contactEmail', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'clientUid', 'firmId', 'firmName', 'name', 'businessName', 'code', 'businessType', 'gstin', 'pan', 'financialYear', 'membershipStatus', 'accountingStatus', 'docProcessingStatus', 'tallyStatus', 'contactEmail', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
-        && data.ownerUid == request.auth.uid
         && isValidId(data.ownerUid)
+        && (!('clientUid' in data) || isValidId(data.clientUid))
         && isValidId(data.firmId)
+        && (!('firmName' in data) || (data.firmName is string && data.firmName.size() <= 120))
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && (!('businessName' in data) || (data.businessName is string && data.businessName.size() <= 120))
         && data.code is string && data.code.size() >= 1 && data.code.size() <= 24
         && data.businessType is string && data.businessType.size() <= 60
         && data.gstin is string && data.gstin.size() <= 20
         && data.pan is string && data.pan.size() <= 16
         && data.financialYear is string && data.financialYear.size() <= 20
+        && (!('membershipStatus' in data) || (data.membershipStatus is string && data.membershipStatus in ['PENDING', 'APPROVED', 'REJECTED']))
         && data.accountingStatus is string && data.accountingStatus.size() <= 30 && data.accountingStatus in ['Up to Date', 'Review Pending', 'Action Required']
         && data.docProcessingStatus is string && data.docProcessingStatus.size() <= 30 && data.docProcessingStatus in ['Idle', 'Processing', 'Attention']
         && data.tallyStatus is string && data.tallyStatus.size() <= 30 && data.tallyStatus in ['Synced', 'Pending Sync', 'Disconnected']
@@ -100,10 +147,10 @@ service cloud.firestore {
 
     function isValidAccountingDocument(data) {
       return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'fileName', 'fileType', 'fileSize', 'financialYear', 'period', 'category', 'uploadDate', 'processingStatus', 'extractionStatus', 'accountingStatus', 'confidence', 'vendorOrParty', 'invoiceNumber', 'invoiceDate', 'totalAmount', 'taxAmount', 'gstin', 'uploadedByRole', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'fileName', 'fileType', 'fileSize', 'financialYear', 'period', 'category', 'uploadDate', 'processingStatus', 'extractionStatus', 'accountingStatus', 'confidence', 'vendorOrParty', 'invoiceNumber', 'invoiceDate', 'totalAmount', 'taxAmount', 'gstin', 'uploadedByRole', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'clientUid', 'firmId', 'clientId', 'clientName', 'fileName', 'fileType', 'fileSize', 'financialYear', 'period', 'category', 'uploadDate', 'processingStatus', 'extractionStatus', 'accountingStatus', 'confidence', 'vendorOrParty', 'invoiceNumber', 'invoiceDate', 'totalAmount', 'taxAmount', 'gstin', 'driveFileId', 'driveFolderPath', 'uploadedByRole', 'updatedAt'])
         && isValidId(data.id)
-        && data.ownerUid == request.auth.uid
         && isValidId(data.ownerUid)
+        && (!('clientUid' in data) || isValidId(data.clientUid))
         && isValidId(data.firmId)
         && isValidId(data.clientId)
         && data.clientName is string && data.clientName.size() <= 120
@@ -124,6 +171,8 @@ service cloud.firestore {
         && data.totalAmount is number
         && data.taxAmount is number
         && data.gstin is string && data.gstin.size() <= 20
+        && (!('driveFileId' in data) || (data.driveFileId is string && data.driveFileId.size() <= 128))
+        && (!('driveFolderPath' in data) || (data.driveFolderPath is string && data.driveFolderPath.size() <= 260))
         && data.uploadedByRole is string && data.uploadedByRole.size() <= 20 && data.uploadedByRole in ['ca', 'client']
         && data.updatedAt is string && data.updatedAt.size() <= 40;
     }
@@ -216,7 +265,6 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'documentId', 'documentName', 'clientName', 'stage', 'confidence', 'validationSummary', 'startedAt', 'updatedAt'])
         && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'documentId', 'documentName', 'clientName', 'stage', 'confidence', 'validationSummary', 'startedAt', 'updatedAt'])
         && isValidId(data.id)
-        && data.ownerUid == request.auth.uid
         && isValidId(data.ownerUid)
         && isValidId(data.firmId)
         && isValidId(data.clientId)
@@ -281,7 +329,6 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'reference', 'eventType', 'actor', 'description', 'timestamp'])
         && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'reference', 'eventType', 'actor', 'description', 'timestamp'])
         && isValidId(data.id)
-        && data.ownerUid == request.auth.uid
         && isValidId(data.ownerUid)
         && isValidId(data.firmId)
         && isValidId(data.clientId)
@@ -296,68 +343,135 @@ service cloud.firestore {
 
     function isValidClientRequest(data) {
       return data.keys().hasAll(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'title', 'category', 'status', 'senderRole', 'message', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'ownerUid', 'firmId', 'clientId', 'clientName', 'financialYear', 'title', 'category', 'status', 'senderRole', 'message', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'clientUid', 'firmId', 'clientId', 'clientName', 'businessName', 'email', 'financialYear', 'title', 'category', 'requestType', 'status', 'senderRole', 'message', 'requestedAt', 'updatedAt'])
         && isValidId(data.id)
-        && data.ownerUid == request.auth.uid
         && isValidId(data.ownerUid)
+        && (!('clientUid' in data) || isValidId(data.clientUid))
         && isValidId(data.firmId)
         && isValidId(data.clientId)
         && data.clientName is string && data.clientName.size() <= 120
+        && (!('businessName' in data) || (data.businessName is string && data.businessName.size() <= 120))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 120))
         && data.financialYear is string && data.financialYear.size() <= 20
         && data.title is string && data.title.size() <= 150
         && data.category is string && data.category.size() <= 50
-        && data.status is string && data.status.size() <= 30 && data.status in ['Pending Client', 'Submitted', 'Resolved']
+        && (!('requestType' in data) || (data.requestType is string && data.requestType in ['MEMBERSHIP', 'DOCUMENT']))
+        && data.status is string && data.status.size() <= 30 && data.status in ['PENDING', 'APPROVED', 'REJECTED', 'Pending Client', 'Submitted', 'Resolved']
         && data.senderRole is string && data.senderRole.size() <= 20 && data.senderRole in ['ca', 'client']
         && data.message is string && data.message.size() <= 400
+        && (!('requestedAt' in data) || (data.requestedAt is string && data.requestedAt.size() <= 40))
+        && data.updatedAt is string && data.updatedAt.size() <= 40;
+    }
+
+    function isValidFirmDriveConnection(data) {
+      return data.keys().hasAll(['id', 'firmId', 'ownerUid', 'driveEmail', 'encryptedRefreshToken', 'iv', 'authTag', 'connectedAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'firmId', 'ownerUid', 'driveEmail', 'encryptedRefreshToken', 'iv', 'authTag', 'rootFolderId', 'connectedAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.firmId)
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.driveEmail is string && data.driveEmail.size() >= 3 && data.driveEmail.size() <= 120
+        && data.encryptedRefreshToken is string && data.encryptedRefreshToken.size() >= 10 && data.encryptedRefreshToken.size() <= 1000
+        && data.iv is string && data.iv.size() >= 10 && data.iv.size() <= 100
+        && data.authTag is string && data.authTag.size() >= 10 && data.authTag.size() <= 100
+        && (!('rootFolderId' in data) || (data.rootFolderId is string && data.rootFolderId.size() <= 128))
+        && data.connectedAt is string && data.connectedAt.size() <= 40
         && data.updatedAt is string && data.updatedAt.size() <= 40;
     }
 
     // 4. Collection Match Blocks
 
-    // Connection probe path (read-only for signed-in users or safe rejection)
+    // Connection probe path
     match /test/{docId} {
-      allow get: if isSignedIn() && isValidId(docId);
+      allow get: if isValidId(docId);
       allow list, create, update, delete: if false;
     }
 
-    // Users Collection (Strict PII Isolation: Owner-only get, no list)
+    // Users Collection (Strict PII & Role Isolation)
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
-      allow list: if false;
-      allow create: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId && isValidUser(incoming());
-      allow update: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId && isValidUser(incoming())
-        && incoming().uid == existing().uid
-        && incoming().createdAt == existing().createdAt
-        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'businessName', 'updatedAt']);
-      allow delete: if false;
+      allow get: if isSignedIn() && isValidId(userId) && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isFirmOwner(existing().firmId)
+      );
+      allow list: if isAdmin();
+      // Public registration: ONLY client with PENDING status! Firm owners/CAs cannot be publicly registered.
+      allow create: if (isAdmin() && isValidId(userId) && incoming().uid == userId && isValidUser(incoming())) || (
+        isSignedIn() && isValidId(userId) && request.auth.uid == userId && isValidUser(incoming()) &&
+        incoming().role == 'client' &&
+        incoming().membershipStatus == 'PENDING'
+      );
+      allow update: if (isAdmin() && isValidId(userId) && isValidUser(incoming())) || (
+        isSignedIn() && isValidId(userId) && isValidUser(incoming()) && (
+          // Case 1: User updating their own profile (cannot change role or firmId)
+          (
+            request.auth.uid == userId
+            && incoming().uid == existing().uid
+            && incoming().role == existing().role
+            && incoming().createdAt == existing().createdAt
+            && (existing().firmId == 'pending' || incoming().firmId == existing().firmId)
+            && (
+              !('membershipStatus' in incoming()) ||
+              incoming().membershipStatus == existing().membershipStatus ||
+              incoming().membershipStatus == 'PENDING'
+            )
+          ) ||
+          // Case 2: CA Firm Owner approving or rejecting a client user belonging to their firm
+          (
+            isFirmOwner(existing().firmId)
+            && incoming().uid == existing().uid
+            && incoming().role == existing().role
+            && incoming().firmId == existing().firmId
+            && incoming().createdAt == existing().createdAt
+            && incoming().diff(existing()).affectedKeys().hasOnly(['membershipStatus', 'clientId', 'updatedAt'])
+          )
+        )
+      );
+      allow delete: if isAdmin();
     }
 
-    // Firms Collection
+    // Firms Collection (Active firms searchable in client registration directory; mutations restricted to Fenora Super Admin or firm owner)
     match /firms/{firmId} {
-      allow get: if isSignedIn() && isValidId(firmId) && existing().ownerUid == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create: if isVerifiedUser() && isValidId(firmId) && incoming().id == firmId && isValidFirm(incoming());
-      allow update: if isVerifiedUser() && isValidId(firmId) && isValidFirm(incoming())
+      allow get: if isValidId(firmId) && (existing().active == true || existing().status == 'active' || isSignedIn());
+      allow list: if (resource.data.active == true || resource.data.status == 'active' || isAdmin() || isFirmOwner(resource.data.id));
+      // Manual Onboarding ONLY: Only Fenora Super Admin can create firms
+      allow create: if isAdmin() && isValidId(firmId) && incoming().id == firmId && isValidFirm(incoming());
+      allow update: if (isAdmin() && isValidId(firmId) && isValidFirm(incoming())) || (
+        isFirmOwner(firmId)
+        && isValidId(firmId)
+        && isValidFirm(incoming())
+        && isFirmActive(firmId)
         && existing().ownerUid == request.auth.uid
         && incoming().id == existing().id
         && incoming().ownerUid == existing().ownerUid
         && incoming().createdAt == existing().createdAt
-        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'registrationNo', 'gstin', 'city', 'defaultFinancialYear']);
-      allow delete: if false;
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'firmName', 'ownerName', 'email', 'contactPhone', 'registrationNo', 'gstin', 'city', 'defaultFinancialYear', 'driveConnected', 'driveEmail', 'driveOnboardingCompleted', 'mustChangePassword', 'updatedAt'])
+      );
+      allow delete: if isAdmin();
     }
 
-    // Clients Collection
+    // Clients Collection (Isolated per firm owner and linked client user)
     match /clients/{clientId} {
-      allow get: if isSignedIn() && isValidId(clientId) && existing().ownerUid == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create: if isVerifiedUser() && isValidId(clientId) && incoming().id == clientId && isValidClient(incoming());
+      allow get: if isSignedIn() && isValidId(clientId) && (
+        existing().ownerUid == request.auth.uid ||
+        existing().clientUid == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.clientUid == request.auth.uid
+      );
+      allow create: if isVerifiedUser() && isValidId(clientId) && incoming().id == clientId && isValidClient(incoming()) && (
+        // Created by CA firm owner directly
+        incoming().ownerUid == request.auth.uid ||
+        // Created by registering client (must be PENDING)
+        (incoming().clientUid == request.auth.uid && incoming().membershipStatus == 'PENDING')
+      );
       allow update: if isVerifiedUser() && isValidId(clientId) && isValidClient(incoming())
         && existing().ownerUid == request.auth.uid
         && incoming().id == existing().id
         && incoming().ownerUid == existing().ownerUid
         && incoming().firmId == existing().firmId
-        && incoming().createdAt == existing().createdAt
-        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'code', 'businessType', 'gstin', 'pan', 'financialYear', 'accountingStatus', 'docProcessingStatus', 'tallyStatus', 'contactEmail', 'updatedAt']);
+        && incoming().createdAt == existing().createdAt;
       allow delete: if false;
     }
 
@@ -375,18 +489,36 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Accounting Documents Collection
+    // Accounting Documents Collection (Pending clients strictly forbidden from uploading)
     match /documents/{docId} {
-      allow get: if isSignedIn() && isValidId(docId) && existing().ownerUid == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create: if isVerifiedUser() && isValidId(docId) && incoming().id == docId && isValidAccountingDocument(incoming());
+      allow get: if isSignedIn() && isValidId(docId) && (
+        existing().ownerUid == request.auth.uid ||
+        existing().clientUid == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.clientUid == request.auth.uid
+      );
+      allow create: if isVerifiedUser() && isValidId(docId) && incoming().id == docId && isValidAccountingDocument(incoming()) && (
+        // CA uploading to their own firm
+        (incoming().uploadedByRole == 'ca' && incoming().ownerUid == request.auth.uid) ||
+        // Approved client uploading to their linked firm
+        (
+          incoming().uploadedByRole == 'client'
+          && incoming().clientUid == request.auth.uid
+          && exists(/databases/$(database)/documents/clients/$(incoming().clientId))
+          && get(/databases/$(database)/documents/clients/$(incoming().clientId)).data.clientUid == request.auth.uid
+          && get(/databases/$(database)/documents/clients/$(incoming().clientId)).data.firmId == incoming().firmId
+          && get(/databases/$(database)/documents/clients/$(incoming().clientId)).data.membershipStatus == 'APPROVED'
+        )
+      );
       allow update: if isVerifiedUser() && isValidId(docId) && isValidAccountingDocument(incoming())
         && existing().ownerUid == request.auth.uid
         && incoming().id == existing().id
         && incoming().ownerUid == existing().ownerUid
         && incoming().firmId == existing().firmId
         && incoming().clientId == existing().clientId
-        && incoming().diff(existing()).affectedKeys().hasOnly(['processingStatus', 'extractionStatus', 'accountingStatus', 'confidence', 'vendorOrParty', 'invoiceNumber', 'invoiceDate', 'totalAmount', 'taxAmount', 'gstin', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['processingStatus', 'extractionStatus', 'accountingStatus', 'confidence', 'vendorOrParty', 'invoiceNumber', 'invoiceDate', 'totalAmount', 'taxAmount', 'gstin', 'driveFileId', 'driveFolderPath', 'updatedAt']);
       allow delete: if false;
     }
 
@@ -454,7 +586,14 @@ service cloud.firestore {
     match /aiProcessingJobs/{jobId} {
       allow get: if isSignedIn() && isValidId(jobId) && existing().ownerUid == request.auth.uid;
       allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create: if isVerifiedUser() && isValidId(jobId) && incoming().id == jobId && isValidAIProcessingJob(incoming());
+      allow create: if isVerifiedUser() && isValidId(jobId) && incoming().id == jobId && isValidAIProcessingJob(incoming()) && (
+        incoming().ownerUid == request.auth.uid ||
+        (
+          exists(/databases/$(database)/documents/clients/$(incoming().clientId)) &&
+          get(/databases/$(database)/documents/clients/$(incoming().clientId)).data.clientUid == request.auth.uid &&
+          get(/databases/$(database)/documents/clients/$(incoming().clientId)).data.membershipStatus == 'APPROVED'
+        )
+      );
       allow update: if isVerifiedUser() && isValidId(jobId) && isValidAIProcessingJob(incoming())
         && existing().ownerUid == request.auth.uid
         && incoming().id == existing().id
@@ -506,19 +645,44 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Client Requests Collection (CA <-> Client Portal Communication)
+    // Client Requests Collection (Client Registration Approvals & CA <-> Client Communication)
     match /clientRequests/{reqId} {
-      allow get: if isSignedIn() && isValidId(reqId) && existing().ownerUid == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create: if isVerifiedUser() && isValidId(reqId) && incoming().id == reqId && isValidClientRequest(incoming());
+      allow get: if isSignedIn() && isValidId(reqId) && (
+        existing().ownerUid == request.auth.uid ||
+        existing().clientUid == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.clientUid == request.auth.uid
+      );
+      allow create: if isVerifiedUser() && isValidId(reqId) && incoming().id == reqId && isValidClientRequest(incoming()) && (
+        incoming().ownerUid == request.auth.uid ||
+        (incoming().clientUid == request.auth.uid && incoming().status == 'PENDING')
+      );
       allow update: if isVerifiedUser() && isValidId(reqId) && isValidClientRequest(incoming())
         && existing().ownerUid == request.auth.uid
         && incoming().id == existing().id
         && incoming().ownerUid == existing().ownerUid
         && incoming().firmId == existing().firmId
-        && incoming().clientId == existing().clientId
-        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'senderRole', 'message', 'updatedAt']);
+        && incoming().clientId == existing().clientId;
       allow delete: if false;
+    }
+
+    // Firm Drive Connections Collection (Client-Persisted, Server-Encrypted OAuth Vault)
+    match /firmDriveConnections/{firmId} {
+      allow list: if false;
+      allow get: if isFirmOwner(firmId);
+      allow create: if isFirmOwner(firmId)
+        && incoming().id == firmId
+        && incoming().firmId == firmId
+        && isValidFirmDriveConnection(incoming());
+      allow update: if isFirmOwner(firmId)
+        && incoming().id == firmId
+        && incoming().firmId == firmId
+        && isValidFirmDriveConnection(incoming())
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().firmId == existing().firmId;
+      allow delete: if isFirmOwner(firmId);
     }
   }
 }

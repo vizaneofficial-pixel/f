@@ -6,486 +6,471 @@ import {
   Code2,
   Shield,
   CheckCircle2,
-  AlertTriangle,
   Database,
   Server,
+  HardDrive,
+  UserPlus,
+  Check,
+  X,
+  BarChart3,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { useFenora } from '../../context/FenoraContext';
 import { FINANCIAL_YEARS } from '../../data/seedData';
+import { NavigationTab } from '../../types/accounting';
 
-interface GSTReconciliationSectionProps {
-  initialClientId?: string | null;
-}
+/**
+ * 1. CLIENT REQUESTS SECTION (CA Approval System for Client Registrations)
+ */
+export const ClientRequestsSection: React.FC = () => {
+  const {
+    clientRequests,
+    clients,
+    approveClientMembership,
+    rejectClientMembership,
+  } = useFenora();
 
-export const GSTReconciliationSection: React.FC<GSTReconciliationSectionProps> = ({
-  initialClientId,
-}) => {
-  const { clients, vouchers, gstReconciliation } = useFenora();
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
-  const [selectedClient, setSelectedClient] = useState<string>(initialClientId || 'ALL');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  // Combine membership requests from clientRequests collection
+  const membershipRequests = clientRequests.filter(
+    (r) =>
+      r.requestType === 'MEMBERSHIP' ||
+      r.status === 'PENDING' ||
+      r.status === 'APPROVED' ||
+      r.status === 'REJECTED'
+  );
 
-  const filteredItems = gstReconciliation.filter((item) => {
-    const matchClient = selectedClient === 'ALL' || item.clientId === selectedClient;
-    const matchStatus = statusFilter === 'ALL' || item.status === statusFilter;
-    const matchSearch =
-      item.supplierName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.supplierGstin.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.invoiceNo.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchClient && matchStatus && matchSearch;
+  // Also surface any client record in `clients` with PENDING status that might not have a matching request entry
+  const standalonePendingClients = clients.filter(
+    (c) =>
+      c.membershipStatus === 'PENDING' &&
+      !membershipRequests.some((r) => r.clientId === c.id)
+  );
+
+  const unifiedRequests = [
+    ...membershipRequests.map((r) => ({
+      id: r.id,
+      clientName: r.clientName,
+      businessName: r.businessName || r.clientName,
+      email: r.email || '—',
+      requestedAt: r.requestedAt || r.updatedAt || '—',
+      membershipStatus:
+        r.status === 'APPROVED' || r.status === 'Resolved'
+          ? 'APPROVED'
+          : r.status === 'REJECTED'
+          ? 'REJECTED'
+          : 'PENDING',
+    })),
+    ...standalonePendingClients.map((c) => ({
+      id: `req_mem_${c.id}`,
+      clientName: c.name,
+      businessName: c.businessName || c.name,
+      email: c.contactEmail || '—',
+      requestedAt: 'Recent',
+      membershipStatus: c.membershipStatus || 'PENDING',
+    })),
+  ];
+
+  const filteredRequests = unifiedRequests.filter((req) => {
+    if (statusFilter === 'ALL') return true;
+    return req.membershipStatus === statusFilter;
   });
 
-  // Compute simulated Sales / Purchase / Input GST / Output GST summary
-  const salesVouchers = vouchers.filter(
-    (v) =>
-      (selectedClient === 'ALL' || v.clientId === selectedClient) &&
-      v.voucherType === 'Sales'
-  );
-  const purchaseVouchers = vouchers.filter(
-    (v) =>
-      (selectedClient === 'ALL' || v.clientId === selectedClient) &&
-      v.voucherType === 'Purchase'
-  );
+  const pendingCount = unifiedRequests.filter((r) => r.membershipStatus === 'PENDING').length;
 
-  const totalSalesValue = salesVouchers.reduce((s, v) => s + v.totalCredit, 0) || 826000;
-  const totalPurchaseValue = purchaseVouchers.reduce((s, v) => s + v.totalDebit, 0) || 590000;
-  const outputGstTotal = Math.round((totalSalesValue * 18) / 118);
-  const inputGstBooks = filteredItems.reduce((s, i) => s + i.booksIgstCgstSgst, 0);
-  const inputGst2B = filteredItems.reduce((s, i) => s + i.gstr2bTax, 0);
+  const handleApprove = async (reqId: string, businessName: string) => {
+    setProcessingId(reqId);
+    setFeedbackMsg(null);
+    const res = await approveClientMembership(reqId);
+    setProcessingId(null);
+    if (res.ok) {
+      setFeedbackMsg(`Approved ${businessName}. Client can now upload accounting documents.`);
+    } else {
+      setFeedbackMsg(res.error || 'Could not approve request.');
+    }
+  };
 
-  const mismatchedCount = gstReconciliation.filter((i) => i.status === 'Mismatch').length;
-  const missingCount = gstReconciliation.filter(
-    (i) => i.status === 'Missing in GSTR-2B' || i.status === 'Missing in Books'
-  ).length;
-  const duplicateCount = gstReconciliation.filter((i) => i.status === 'Duplicate').length;
-  const ineligibleCount = gstReconciliation.filter(
-    (i) => i.status === 'Ineligible ITC'
-  ).length;
+  const handleReject = async (reqId: string, businessName: string) => {
+    setProcessingId(reqId);
+    setFeedbackMsg(null);
+    const res = await rejectClientMembership(reqId);
+    setProcessingId(null);
+    if (res.ok) {
+      setFeedbackMsg(`Rejected membership request from ${businessName}.`);
+    } else {
+      setFeedbackMsg(res.error || 'Could not reject request.');
+    }
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <p className="text-xs text-slate-500">
-            Simulated GSTR-2B vs Purchase Register Reconciliation · Non-Filing Preview
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Client Membership Verification · Clients cannot upload documents until approved
           </p>
-          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight mt-0.5">
-            GST Reconciliation
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white tracking-tight mt-0.5">
+            Client Requests ({pendingCount} Pending)
           </h1>
         </div>
-        <select
-          value={selectedClient}
-          onChange={(e) => setSelectedClient(e.target.value)}
-          className="text-xs font-medium bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-800"
-        >
-          <option value="ALL">All Firm Clients</option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name} ({c.gstin})
-            </option>
-          ))}
-        </select>
-      </div>
 
-      {/* GST Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <span className="text-xs text-slate-500">Sales & Output GST</span>
-          <p className="text-xl font-semibold font-mono tabular-nums text-slate-900 mt-1">
-            ₹{outputGstTotal.toLocaleString('en-IN')}
-          </p>
-          <span className="text-xs text-slate-400 font-mono">
-            Gross Sales: ₹{totalSalesValue.toLocaleString('en-IN')}
-          </span>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <span className="text-xs text-slate-500">Purchase & Input GST (Books)</span>
-          <p className="text-xl font-semibold font-mono tabular-nums text-slate-900 mt-1">
-            ₹{inputGstBooks.toLocaleString('en-IN')}
-          </p>
-          <span className="text-xs text-slate-400 font-mono">
-            Purchases: ₹{totalPurchaseValue.toLocaleString('en-IN')}
-          </span>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <span className="text-xs text-slate-500">GSTR-2B Auto-Drafted ITC</span>
-          <p className="text-xl font-semibold font-mono tabular-nums text-emerald-700 mt-1">
-            ₹{inputGst2B.toLocaleString('en-IN')}
-          </p>
-          <span className="text-xs text-slate-400 font-mono">
-            Variance: ₹{Math.abs(inputGstBooks - inputGst2B).toLocaleString('en-IN')}
-          </span>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <span className="text-xs text-slate-500">Reconciliation Exceptions</span>
-          <p className="text-xl font-semibold font-mono tabular-nums text-amber-700 mt-1">
-            {mismatchedCount + missingCount + duplicateCount + ineligibleCount}
-          </p>
-          <span className="text-xs text-slate-400">
-            {mismatchedCount} mismatch · {missingCount} missing · {ineligibleCount} Sec 17(5)
-          </span>
-        </div>
-      </div>
-
-      {/* Search & Status Filter */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search supplier name, GSTIN, or invoice number..."
-            className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-300 rounded-md"
-          />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/70 rounded-md">
-          {[
-            'ALL',
-            'Matched',
-            'Mismatch',
-            'Missing in GSTR-2B',
-            'Missing in Books',
-            'Duplicate',
-            'Ineligible ITC',
-          ].map((st) => (
+        <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-200/70 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+          {(['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const).map((st) => (
             <button
               key={st}
               type="button"
               onClick={() => setStatusFilter(st)}
-              className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                 statusFilter === st
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-2xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              {st === 'ALL' ? 'All Invoices' : st}
+              {st === 'ALL' ? 'All' : st}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Reconciliation Table */}
-      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 text-xs text-slate-500 bg-slate-50/60">
-                <th className="py-3 px-5 font-medium">Supplier · GSTIN</th>
-                <th className="py-3 px-4 font-medium">Invoice No · Date</th>
-                <th className="py-3 px-4 font-medium text-right">Books Taxable · GST</th>
-                <th className="py-3 px-4 font-medium text-right">GSTR-2B Taxable · GST</th>
-                <th className="py-3 px-4 font-medium">Status</th>
-                <th className="py-3 px-5 font-medium">CA Audit Remarks</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 text-sm">
-              {filteredItems.map((item) => (
-                <tr key={item.id} className="hover:bg-slate-50/70">
-                  <td className="py-3.5 px-5">
-                    <p className="font-semibold text-slate-900 text-xs">{item.supplierName}</p>
-                    <p className="text-xs font-mono text-slate-500">{item.supplierGstin}</p>
-                    <p className="text-[11px] text-slate-400">{item.clientName}</p>
-                  </td>
-                  <td className="py-3.5 px-4 font-mono tabular-nums text-xs">
-                    <div className="text-slate-900 font-medium">{item.invoiceNo}</div>
-                    <div className="text-slate-500">{item.invoiceDate}</div>
-                  </td>
-                  <td className="py-3.5 px-4 text-right font-mono tabular-nums text-xs">
-                    <div className="text-slate-900">
-                      ₹{item.booksTaxable.toLocaleString('en-IN')}
-                    </div>
-                    <div className="text-slate-500">
-                      Tax: ₹{item.booksIgstCgstSgst.toLocaleString('en-IN')}
-                    </div>
-                  </td>
-                  <td className="py-3.5 px-4 text-right font-mono tabular-nums text-xs">
-                    <div className="text-slate-900">
-                      ₹{item.gstr2bTaxable.toLocaleString('en-IN')}
-                    </div>
-                    <div className="text-slate-500">
-                      Tax: ₹{item.gstr2bTax.toLocaleString('en-IN')}
-                    </div>
-                  </td>
-                  <td className="py-3.5 px-4 text-xs font-medium">
-                    <span
-                      className={
-                        item.status === 'Matched'
-                          ? 'text-emerald-700'
-                          : item.status === 'Ineligible ITC' || item.status === 'Duplicate'
-                          ? 'text-red-600'
-                          : 'text-amber-700'
-                      }
-                    >
-                      {item.status}
-                    </span>
-                  </td>
-                  <td className="py-3.5 px-5 text-xs text-slate-600 max-w-xs">
-                    {item.remarks}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export const TallyIntegrationSection: React.FC = () => {
-  const {
-    clients,
-    vouchers,
-    tallySyncJobs,
-    generateTallyXmlForClient,
-    simulateTallyImportForClient,
-  } = useFenora();
-
-  const [selectedClientId, setSelectedClientId] = useState<string>(
-    clients[0]?.id || 'client_aravind_tex'
-  );
-  const [selectedFY, setSelectedFY] = useState<string>('2026-27');
-  const [generatedXml, setGeneratedXml] = useState<string | null>(null);
-  const [syncBanner, setSyncBanner] = useState<string | null>(null);
-
-  const activeClient =
-    clients.find((c) => c.id === selectedClientId) || clients[0];
-
-  const clientVouchers = vouchers.filter((v) => v.clientId === activeClient?.id);
-  const pendingVouchers = clientVouchers.filter((v) => v.tallySyncStatus === 'Pending').length;
-  const importedVouchers = clientVouchers.filter(
-    (v) => v.tallySyncStatus === 'Imported' || v.tallySyncStatus === 'XML Generated'
-  ).length;
-  const failedRecords = clientVouchers.filter((v) => v.validationStatus !== 'Valid').length;
-
-  const handleGenerateXml = async () => {
-    if (!activeClient) return;
-    const xml = await generateTallyXmlForClient(activeClient.id, selectedFY);
-    setGeneratedXml(xml);
-    setSyncBanner(`Generated TallyPrime XML envelope for ${activeClient.name}.`);
-  };
-
-  const handleDownloadXml = async () => {
-    if (!activeClient) return;
-    const xml = generatedXml || (await generateTallyXmlForClient(activeClient.id, selectedFY));
-    setGeneratedXml(xml);
-    const blob = new Blob([xml], { type: 'application/xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Fenora_TallyPrime_${activeClient.code}_${selectedFY}.xml`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleSimulateImport = async () => {
-    if (!activeClient) return;
-    await simulateTallyImportForClient(activeClient.id, selectedFY);
-    setSyncBanner(
-      `Simulated TallyPrime import completed for ${activeClient.name}. Sync job recorded.`
-    );
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <p className="text-xs text-slate-500">
-            Simulated TallyPrime v4.0 XML Bridge · Ready for Local Desktop Connector
-          </p>
-          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight mt-0.5">
-            Tally Integration
-          </h1>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
+      {feedbackMsg && (
+        <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs font-medium flex items-center justify-between">
+          <span>{feedbackMsg}</span>
           <button
             type="button"
-            onClick={handleGenerateXml}
-            className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md inline-flex items-center gap-1.5"
-          >
-            <Code2 className="w-3.5 h-3.5" />
-            Generate Tally XML
-          </button>
-          <button
-            type="button"
-            onClick={handleDownloadXml}
-            className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md inline-flex items-center gap-1.5"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Download XML
-          </button>
-          <button
-            type="button"
-            onClick={handleSimulateImport}
-            className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md inline-flex items-center gap-1.5"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Simulate Tally Import
-          </button>
-        </div>
-      </div>
-
-      {syncBanner && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-xs text-emerald-900 flex items-center justify-between">
-          <span>{syncBanner}</span>
-          <button
-            type="button"
-            onClick={() => setSyncBanner(null)}
-            className="font-medium underline"
+            onClick={() => setFeedbackMsg(null)}
+            className="underline font-semibold"
           >
             Dismiss
           </button>
         </div>
       )}
 
-      {/* Company & FY Selector Card */}
-      <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-5">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Target Tally Company (Client)
-            </label>
-            <select
-              value={selectedClientId}
-              onChange={(e) => {
-                setSelectedClientId(e.target.value);
-                setGeneratedXml(null);
-              }}
-              className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2"
-            >
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.tallyStatus})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Financial Year
-            </label>
-            <select
-              value={selectedFY}
-              onChange={(e) => setSelectedFY(e.target.value)}
-              className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2"
-            >
-              {FINANCIAL_YEARS.map((fy) => (
-                <option key={fy} value={fy}>
-                  FY {fy}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Connector Mode
-            </label>
-            <div className="text-xs font-mono text-slate-700 bg-slate-50 border border-slate-200 rounded-md px-3 py-2.5">
-              Simulated XML Bridge · Last Sync: {tallySyncJobs[0]?.syncedAt || '2026-11-06 17:30'}
-            </div>
-          </div>
+      {filteredRequests.length === 0 ? (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 text-center space-y-2">
+          <UserPlus className="w-7 h-7 text-slate-400 mx-auto" />
+          <p className="text-sm font-semibold text-slate-900 dark:text-white">
+            No client registration requests
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+            When clients select your CA firm during registration, their membership requests will appear here for your approval.
+          </p>
         </div>
-
-        {/* Status Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2 border-t border-slate-200">
-          <div>
-            <span className="text-xs text-slate-500 block">Pending Vouchers</span>
-            <span className="text-lg font-semibold font-mono tabular-nums text-amber-700">
-              {pendingVouchers}
-            </span>
+      ) : (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500 bg-slate-50/60 dark:bg-slate-950/40">
+                  <th className="py-3.5 px-5 font-medium">Client Name</th>
+                  <th className="py-3.5 px-4 font-medium">Business / Company Name</th>
+                  <th className="py-3.5 px-4 font-medium">Gmail Address</th>
+                  <th className="py-3.5 px-4 font-medium">Request Date</th>
+                  <th className="py-3.5 px-4 font-medium">Approval Status</th>
+                  <th className="py-3.5 px-5 font-medium text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
+                {filteredRequests.map((req) => {
+                  const isBusy = processingId === req.id;
+                  return (
+                    <tr
+                      key={req.id}
+                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
+                    >
+                      <td className="py-4 px-5 font-semibold text-slate-900 dark:text-white">
+                        {req.clientName}
+                      </td>
+                      <td className="py-4 px-4 font-medium text-slate-800 dark:text-slate-200">
+                        {req.businessName}
+                      </td>
+                      <td className="py-4 px-4 font-mono text-slate-600 dark:text-slate-300">
+                        {req.email}
+                      </td>
+                      <td className="py-4 px-4 font-mono text-slate-500">
+                        {req.requestedAt}
+                      </td>
+                      <td className="py-4 px-4">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold ${
+                            req.membershipStatus === 'APPROVED'
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                              : req.membershipStatus === 'REJECTED'
+                              ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
+                              : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                          }`}
+                        >
+                          {req.membershipStatus}
+                        </span>
+                      </td>
+                      <td className="py-4 px-5 text-right whitespace-nowrap">
+                        {req.membershipStatus === 'PENDING' ? (
+                          <div className="inline-flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleApprove(req.id, req.businessName)}
+                              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center gap-1 disabled:opacity-50"
+                            >
+                              {isBusy ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Check className="w-3.5 h-3.5" />
+                              )}
+                              <span>APPROVE</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleReject(req.id, req.businessName)}
+                              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-rose-600/10 hover:bg-rose-600/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 inline-flex items-center gap-1 disabled:opacity-50"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              <span>REJECT</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 font-mono text-[11px]">
+                            Decision Recorded
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-          <div>
-            <span className="text-xs text-slate-500 block">Imported / XML Ready</span>
-            <span className="text-lg font-semibold font-mono tabular-nums text-emerald-700">
-              {importedVouchers}
-            </span>
-          </div>
-          <div>
-            <span className="text-xs text-slate-500 block">Failed / Imbalanced</span>
-            <span className="text-lg font-semibold font-mono tabular-nums text-red-600">
-              {failedRecords}
-            </span>
-          </div>
-          <div>
-            <span className="text-xs text-slate-500 block">Duplicate Detection</span>
-            <span className="text-xs font-medium text-slate-900 mt-1 block">
-              0 Duplicate Voucher Nos
-            </span>
-          </div>
-          <div>
-            <span className="text-xs text-slate-500 block">Manual Changes Detected</span>
-            <span className="text-xs font-medium text-slate-900 mt-1 block">
-              1 CA Line Correction Locked
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Generated XML Preview if triggered */}
-      {generatedXml && (
-        <div className="bg-slate-900 text-slate-100 rounded-lg p-5 space-y-3 overflow-x-auto">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-            <span className="text-xs font-mono text-emerald-400">
-              TallyPrime XML Envelope Preview ({activeClient?.name})
-            </span>
-            <button
-              type="button"
-              onClick={() => setGeneratedXml(null)}
-              className="text-xs text-slate-400 hover:text-white"
-            >
-              Hide Preview
-            </button>
-          </div>
-          <pre className="text-xs font-mono leading-relaxed overflow-x-auto max-h-72">
-            {generatedXml}
-          </pre>
         </div>
       )}
-
-      {/* Synchronization History */}
-      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900">
-            Synchronization History (Simulated)
-          </h2>
-          <span className="text-xs text-slate-500 font-mono tabular-nums">
-            {tallySyncJobs.length} jobs
-          </span>
-        </div>
-        <div className="divide-y divide-slate-200">
-          {tallySyncJobs.map((job) => (
-            <div
-              key={job.id}
-              className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-            >
-              <div>
-                <p className="text-sm font-semibold text-slate-900">
-                  {job.tallyCompany} ·{' '}
-                  <span className="text-emerald-700 font-medium">{job.status}</span>
-                </p>
-                <p className="text-xs text-slate-600 mt-0.5">{job.summary}</p>
-              </div>
-              <div className="text-right font-mono tabular-nums text-xs text-slate-500 shrink-0">
-                <div>{job.syncedAt}</div>
-                <div>{job.vouchersCount} vouchers</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
+};
+
+/**
+ * 2. REPORTS & ANALYTICS SECTION (Firm-wide & Client-Isolated Financial Reports, GST & Tally)
+ */
+interface ReportsAndAnalyticsSectionProps {
+  initialClientId?: string | null;
+  onNavigate?: (tab: NavigationTab, clientId?: string) => void;
+}
+
+export const ReportsAndAnalyticsSection: React.FC<ReportsAndAnalyticsSectionProps> = ({
+  initialClientId,
+}) => {
+  const {
+    clients,
+    vouchers,
+    documents,
+    tallySyncJobs,
+    generateTallyXmlForClient,
+    simulateTallyImportForClient,
+  } = useFenora();
+
+  const approvedClients = clients.filter(
+    (c) => c.membershipStatus !== 'PENDING' && c.membershipStatus !== 'REJECTED'
+  );
+
+  const [selectedClient, setSelectedClient] = useState<string>(initialClientId || 'ALL');
+  const [selectedFY, setSelectedFY] = useState<string>('2026-27');
+
+  const scopedVouchers = vouchers.filter(
+    (v) => selectedClient === 'ALL' || v.clientId === selectedClient
+  );
+  const scopedDocs = documents.filter(
+    (d) => selectedClient === 'ALL' || d.clientId === selectedClient
+  );
+
+  // Strictly real calculations (Zero-State = 0, never fallback to fake numbers)
+  const salesVouchers = scopedVouchers.filter((v) => v.voucherType === 'Sales');
+  const purchaseVouchers = scopedVouchers.filter((v) => v.voucherType === 'Purchase');
+  const expenseVouchers = scopedVouchers.filter(
+    (v) => v.voucherType === 'Payment' || v.voucherType === 'Journal'
+  );
+
+  const totalSales = salesVouchers.reduce((s, v) => s + v.totalCredit, 0);
+  const totalPurchases = purchaseVouchers.reduce((s, v) => s + v.totalDebit, 0);
+  const totalOtherExpenses = expenseVouchers.reduce((s, v) => s + v.totalDebit, 0);
+  const totalExpenses = totalPurchases + totalOtherExpenses;
+  const netProfit = totalSales - totalExpenses;
+
+  const outputGst = Math.round((totalSales * 18) / 118);
+  const inputGst = Math.round((totalPurchases * 18) / 118);
+
+  const activeClientObj = approvedClients.find((c) => c.id === selectedClient);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Financial Statements, GST Summary & TallyPrime Export · Populated strictly from verified data
+          </p>
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white tracking-tight mt-0.5">
+            Reports & Analytics
+          </h1>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={selectedClient}
+            onChange={(e) => setSelectedClient(e.target.value)}
+            className="text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-200"
+          >
+            <option value="ALL">All Approved Clients ({approvedClients.length})</option>
+            {approvedClients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={selectedFY}
+            onChange={(e) => setSelectedFY(e.target.value)}
+            className="text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-200"
+          >
+            {FINANCIAL_YEARS.map((fy) => (
+              <option key={fy} value={fy}>
+                FY {fy}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Summary KPI Cards (Strict Zero-State) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+          <span className="text-xs text-slate-500 dark:text-slate-400">Total Revenue (Sales)</span>
+          <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-1">
+            ₹{totalSales.toLocaleString('en-IN')}
+          </p>
+        </div>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+          <span className="text-xs text-slate-500 dark:text-slate-400">Total Expenses</span>
+          <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-1">
+            ₹{totalExpenses.toLocaleString('en-IN')}
+          </p>
+        </div>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+          <span className="text-xs text-slate-500 dark:text-slate-400">Net Profit / (Loss)</span>
+          <p className="text-2xl font-semibold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">
+            ₹{netProfit.toLocaleString('en-IN')}
+          </p>
+        </div>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+          <span className="text-xs text-slate-500 dark:text-slate-400">Net GST Liability</span>
+          <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-1">
+            ₹{Math.max(0, outputGst - inputGst).toLocaleString('en-IN')}
+          </p>
+        </div>
+      </div>
+
+      {scopedVouchers.length === 0 ? (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 text-center space-y-2">
+          <BarChart3 className="w-7 h-7 text-slate-400 mx-auto" />
+          <p className="text-sm font-semibold text-slate-900 dark:text-white">
+            No processed accounting data yet
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+            Profit & Loss, Balance Sheet, Sales & Purchase registers, and GST reports will be populated once client documents are uploaded and processed ({scopedDocs.length} documents currently on file).
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-3">
+              Profit & Loss Summary
+            </h2>
+            <div className="space-y-2.5 text-xs font-mono">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Sales & Operational Revenue</span>
+                <span className="text-slate-900 dark:text-white font-semibold">
+                  ₹{totalSales.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Purchases ({purchaseVouchers.length} vouchers)</span>
+                <span className="text-slate-900 dark:text-white">
+                  ₹{totalPurchases.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Operating Expenses</span>
+                <span className="text-slate-900 dark:text-white">
+                  ₹{totalOtherExpenses.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div className="flex justify-between pt-2 border-t border-slate-200 dark:border-slate-800 font-semibold">
+                <span>Net Surplus / (Deficit)</span>
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  ₹{netProfit.toLocaleString('en-IN')}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+                GST & TallyPrime Sync Status
+              </h2>
+              {activeClientObj && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => generateTallyXmlForClient(activeClientObj.id, selectedFY)}
+                    className="px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200"
+                  >
+                    Generate XML
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => simulateTallyImportForClient(activeClientObj.id, selectedFY)}
+                    className="px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-600 text-white"
+                  >
+                    Sync Tally
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="space-y-2.5 text-xs font-mono">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Output GST (Sales)</span>
+                <span className="text-slate-900 dark:text-white">
+                  ₹{outputGst.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Input GST Credit (Purchases)</span>
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  ₹{inputGst.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Tally Sync Jobs Recorded</span>
+                <span className="text-slate-900 dark:text-white">{tallySyncJobs.length}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const GSTReconciliationSection: React.FC<{ initialClientId?: string | null }> = ({
+  initialClientId,
+}) => {
+  return <ReportsAndAnalyticsSection initialClientId={initialClientId} />;
+};
+
+export const TallyIntegrationSection: React.FC = () => {
+  return <ReportsAndAnalyticsSection />;
 };
 
 export const AuditTrailSection: React.FC = () => {
@@ -505,15 +490,13 @@ export const AuditTrailSection: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <p className="text-xs text-slate-500">
-            Append-Only Immutable Event Log · Enforced in Application & Firestore Rules
-          </p>
-          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight mt-0.5">
-            Audit Trail ({auditEvents.length})
-          </h1>
-        </div>
+      <div>
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Append-Only Immutable Event Log
+        </p>
+        <h1 className="text-2xl font-semibold text-slate-900 dark:text-white tracking-tight mt-0.5">
+          Audit Trail ({auditEvents.length})
+        </h1>
       </div>
 
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -523,15 +506,15 @@ export const AuditTrailSection: React.FC = () => {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by event type, voucher/doc reference, actor, or description..."
-            className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-300 rounded-md"
+            placeholder="Search audit events..."
+            className="w-full pl-9 pr-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white"
           />
         </div>
 
         <select
           value={selectedClient}
           onChange={(e) => setSelectedClient(e.target.value)}
-          className="text-xs bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-700"
+          className="text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-700 dark:text-slate-300"
         >
           <option value="ALL">All Clients</option>
           {clients.map((c) => (
@@ -542,174 +525,257 @@ export const AuditTrailSection: React.FC = () => {
         </select>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 text-xs text-slate-500 bg-slate-50/60">
-                <th className="py-3 px-5 font-medium">Timestamp</th>
-                <th className="py-3 px-4 font-medium">Client · FY</th>
-                <th className="py-3 px-4 font-medium">Reference</th>
-                <th className="py-3 px-4 font-medium">Event Type</th>
-                <th className="py-3 px-4 font-medium">Actor</th>
-                <th className="py-3 px-5 font-medium">Description</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 text-sm">
-              {filteredEvents.map((evt) => (
-                <tr key={evt.id} className="hover:bg-slate-50/70">
-                  <td className="py-3.5 px-5 font-mono tabular-nums text-xs text-slate-500 whitespace-nowrap">
-                    {evt.timestamp}
-                  </td>
-                  <td className="py-3.5 px-4 text-xs">
-                    <div className="font-medium text-slate-900">{evt.clientName}</div>
-                    <div className="text-slate-400 font-mono">FY {evt.financialYear}</div>
-                  </td>
-                  <td className="py-3.5 px-4 font-mono text-xs text-slate-800 whitespace-nowrap">
-                    {evt.reference}
-                  </td>
-                  <td className="py-3.5 px-4 text-xs font-semibold text-slate-900 whitespace-nowrap">
-                    {evt.eventType}
-                  </td>
-                  <td className="py-3.5 px-4 text-xs text-slate-600">{evt.actor}</td>
-                  <td className="py-3.5 px-5 text-xs text-slate-700 max-w-md">
-                    {evt.description}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {filteredEvents.length === 0 ? (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-10 text-center text-xs text-slate-400">
+          No audit events recorded yet.
         </div>
-      </div>
+      ) : (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500 bg-slate-50/60 dark:bg-slate-950/40">
+                  <th className="py-3 px-5 font-medium">Timestamp</th>
+                  <th className="py-3 px-4 font-medium">Client</th>
+                  <th className="py-3 px-4 font-medium">Event Type</th>
+                  <th className="py-3 px-4 font-medium">Actor</th>
+                  <th className="py-3 px-5 font-medium">Description</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
+                {filteredEvents.map((evt) => (
+                  <tr key={evt.id}>
+                    <td className="py-3.5 px-5 font-mono text-slate-500">{evt.timestamp}</td>
+                    <td className="py-3.5 px-4 font-medium text-slate-900 dark:text-white">
+                      {evt.clientName}
+                    </td>
+                    <td className="py-3.5 px-4 font-semibold text-slate-900 dark:text-white">
+                      {evt.eventType}
+                    </td>
+                    <td className="py-3.5 px-4 text-slate-600 dark:text-slate-300">{evt.actor}</td>
+                    <td className="py-3.5 px-5 text-slate-700 dark:text-slate-300">
+                      {evt.description}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
+/**
+ * 3. SETTINGS SECTION (CA Firm Details & Google Drive Connection Management)
+ */
 export const SettingsSection: React.FC = () => {
-  const { firm, firebaseUser, userProfile } = useFenora();
-  const [savedToast, setSavedToast] = useState<boolean>(false);
+  const {
+    firm,
+    firebaseUser,
+    userProfile,
+    connectGoogleDrive,
+    disconnectGoogleDrive,
+  } = useFenora();
+
+  const [isCheckingDrive, setIsCheckingDrive] = useState<boolean>(false);
+  const [driveStatusMsg, setDriveStatusMsg] = useState<{
+    ok: boolean;
+    message?: string;
+    missingEnvVars?: string[];
+  } | null>(null);
+
+  const handleConnectDrive = async () => {
+    setIsCheckingDrive(true);
+    setDriveStatusMsg(null);
+    const res = await connectGoogleDrive();
+    setIsCheckingDrive(false);
+    setDriveStatusMsg({
+      ok: res.ok,
+      message: res.error,
+      missingEnvVars: res.missingEnvVars,
+    });
+  };
 
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
-        <p className="text-xs text-slate-500">
-          Practice Configuration · Multi-Tenant Isolation & Integration Adapters
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Multi-Firm Tenant Configuration & Google Drive Storage Adapter
         </p>
-        <h1 className="text-2xl font-semibold text-slate-900 tracking-tight mt-0.5">
+        <h1 className="text-2xl font-semibold text-slate-900 dark:text-white tracking-tight mt-0.5">
           Firm Settings
         </h1>
       </div>
 
       {/* CA Firm Profile */}
-      <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <h2 className="text-base font-semibold text-slate-900">
-          Chartered Accountant Firm Tenant Profile
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+              Chartered Accountant Firm Tenant Profile
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Visible in the client registration CA firm directory
+            </p>
+          </div>
+          <span className="px-3 py-1 rounded-full text-xs font-mono font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
+            Active Firm
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+          <div>
+            <label className="block font-medium text-slate-500 dark:text-slate-400 mb-1">
+              Permanent Firm ID
+            </label>
+            <div className="px-3 py-2 rounded-xl font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200">
+              {firm.id}
+            </div>
+          </div>
+          <div>
+            <label className="block font-medium text-slate-500 dark:text-slate-400 mb-1">
               Firm Name
             </label>
-            <input
-              type="text"
-              defaultValue={firm.name}
-              className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2"
-            />
+            <div className="px-3 py-2 rounded-xl font-medium bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white">
+              {firm.name || '—'}
+            </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">
-              ICAI Firm Registration Number (FRN)
+            <label className="block font-medium text-slate-500 dark:text-slate-400 mb-1">
+              Owner / Partner CA Name
             </label>
-            <input
-              type="text"
-              defaultValue={firm.registrationNo}
-              className="w-full text-sm font-mono bg-white border border-slate-300 rounded-md px-3 py-2"
-            />
+            <div className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200">
+              {firm.ownerName || userProfile?.displayName || '—'}
+            </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">
-              Firm GSTIN
+            <label className="block font-medium text-slate-500 dark:text-slate-400 mb-1">
+              Owner Gmail & Contact
             </label>
-            <input
-              type="text"
-              defaultValue={firm.gstin}
-              className="w-full text-sm font-mono bg-white border border-slate-300 rounded-md px-3 py-2"
-            />
+            <div className="px-3 py-2 rounded-xl font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 truncate">
+              {firebaseUser?.email || userProfile?.email}{' '}
+              {firm.contactPhone ? `· ${firm.contactPhone}` : ''}
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">
-              Default Financial Year
-            </label>
-            <input
-              type="text"
-              defaultValue={firm.defaultFinancialYear}
-              className="w-full text-sm font-mono bg-white border border-slate-300 rounded-md px-3 py-2"
-            />
-          </div>
-        </div>
-        <div className="pt-2 flex items-center justify-between">
-          <span className="text-xs text-slate-500">
-            Tenant ID: <span className="font-mono">{firm.id}</span> · Active User:{' '}
-            {firebaseUser?.email || userProfile?.email}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              setSavedToast(true);
-              setTimeout(() => setSavedToast(false), 2500);
-            }}
-            className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md"
-          >
-            {savedToast ? 'Preferences Saved' : 'Save Firm Settings'}
-          </button>
         </div>
       </div>
 
-      {/* Modular Integration Architecture Status */}
-      <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-200">
-        <div className="p-5 flex items-start justify-between gap-4">
+      {/* Google Drive Integration Panel */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-start gap-3">
-            <Database className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+              <HardDrive className="w-5 h-5" />
+            </div>
             <div>
-              <h3 className="text-sm font-semibold text-slate-900">
-                Firebase Authentication & Multi-Tenant Firestore Rules
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Google Drive Document Storage
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Provisioned and active. Every collection enforces strict ownerUid & firmId isolation and append-only Audit Events.
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Folder hierarchy: <span className="font-mono">Fenora / Clients / Client Name / Financial Year / Documents</span>
               </p>
             </div>
           </div>
-          <span className="text-xs font-medium text-emerald-700 shrink-0">Active</span>
+
+          {firm.driveConnected ? (
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 truncate max-w-xs">
+                Connected: {firm.driveEmail || 'Authorized Account'}
+              </span>
+              <button
+                type="button"
+                onClick={disconnectGoogleDrive}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 hover:bg-rose-500/20 transition-colors"
+              >
+                Disconnect Drive
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleConnectDrive}
+              disabled={isCheckingDrive}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 inline-flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {isCheckingDrive && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>Connect Google Drive</span>
+            </button>
+          )}
+        </div>
+
+        {driveStatusMsg && (
+          <div
+            className={`p-4 rounded-xl border text-xs space-y-2 ${
+              driveStatusMsg.ok
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+                : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {driveStatusMsg.ok ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1">
+                <p className="font-semibold">
+                  {driveStatusMsg.ok
+                    ? 'Google Drive Connected'
+                    : 'Backend Google OAuth Configuration Required'}
+                </p>
+                {driveStatusMsg.message && <p>{driveStatusMsg.message}</p>}
+                {driveStatusMsg.missingEnvVars && driveStatusMsg.missingEnvVars.length > 0 && (
+                  <div className="flex flex-wrap gap-1 pt-1">
+                    {driveStatusMsg.missingEnvVars.map((v) => (
+                      <span
+                        key={v}
+                        className="px-2 py-0.5 rounded bg-slate-900/10 dark:bg-white/10 font-mono text-[10px]"
+                      >
+                        {v}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Architecture & Security Status */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl divide-y divide-slate-200 dark:divide-slate-800">
+        <div className="p-5 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <Database className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Multi-Firm Firestore Security & Tenant Isolation
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Every client, document, and voucher is isolated by permanent firmId and verified ownership.
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 shrink-0">
+            Active
+          </span>
         </div>
 
         <div className="p-5 flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <Server className="w-5 h-5 text-slate-700 shrink-0 mt-0.5" />
+            <Server className="w-5 h-5 text-slate-500 shrink-0 mt-0.5" />
             <div>
-              <h3 className="text-sm font-semibold text-slate-900">
-                Gemini Multimodal Extraction & n8n Workflow Adapter
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                n8n Webhook & Gemini Document Extraction Pipeline
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Currently running deterministic simulated Indian GST & voucher extraction so no paid API keys are required for initial evaluation.
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Ready for N8N_DOCUMENT_WEBHOOK_URL and server-side Gemini multimodal extraction.
               </p>
             </div>
           </div>
-          <span className="text-xs font-medium text-slate-600 shrink-0">Simulated Mode</span>
-        </div>
-
-        <div className="p-5 flex items-start justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <Shield className="w-5 h-5 text-slate-700 shrink-0 mt-0.5" />
-            <div>
-              <h3 className="text-sm font-semibold text-slate-900">
-                TallyPrime Desktop Connector & XML Envelope Generator
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Generates standards-compliant TallyPrime v4.0 XML envelopes (`ALLLEDGERENTRIES.LIST`). Ready for future local Tally port 9000 bridge.
-              </p>
-            </div>
-          </div>
-          <span className="text-xs font-medium text-slate-600 shrink-0">XML Export Ready</span>
+          <span className="text-xs font-medium text-slate-500 shrink-0">Ready</span>
         </div>
       </div>
     </div>

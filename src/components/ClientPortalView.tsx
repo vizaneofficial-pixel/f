@@ -15,6 +15,8 @@ import {
   FileCheck,
   Check,
   Building2,
+  HardDrive,
+  AlertCircle,
 } from 'lucide-react';
 import { useFenora } from '../context/FenoraContext';
 import { useTheme } from '../context/ThemeContext';
@@ -28,38 +30,49 @@ export const ClientPortalView: React.FC = () => {
     activePortalClientId,
     documents,
     financialYears,
-    uploadDocument,
-    triggerAIProcessingForDoc,
+    verifyAndUploadClientDocument,
     signOutUser,
     userProfile,
+    directoryFirms,
   } = useFenora();
 
   const currentClient =
-    clients.find((c) => c.id === activePortalClientId) || clients[0] || {
-      id: 'client_aravind_tex',
-      name: userProfile?.displayName || 'Aravind Technical Textiles Pvt Ltd',
-      code: 'ATX',
+    clients.find((c) => c.id === activePortalClientId || c.id === userProfile?.clientId) ||
+    clients[0] || {
+      id: userProfile?.clientId || '',
+      name: userProfile?.businessName || userProfile?.displayName || 'Client Workspace',
+      code: 'CLI',
       financialYear: '2026-27',
-      gstin: '33AABCA1234F1Z8',
+      gstin: '',
     };
 
+  const assignedFirm = directoryFirms.find((f) => f.id === userProfile?.firmId);
+
   const [selectedFY, setSelectedFY] = useState<string>(currentClient?.financialYear || '2026-27');
-  const [selectedPeriod] = useState<string>('Nov 2026');
+  const [selectedPeriod] = useState<string>(
+    new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+  );
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
+  const [uploadStatusBanner, setUploadStatusBanner] = useState<{
+    ok: boolean;
+    message: string;
+    targetFolderPath?: string;
+  } | null>(null);
   const [previewDoc, setPreviewDoc] = useState<any | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const targetCategoryRef = useRef<DocumentCategory>('Purchase Invoice');
 
-  // Filter client documents for current client & FY
+  // Filter client documents strictly for this client & FY
   const clientDocs = documents.filter(
-    (d) => d.clientId === currentClient.id && (selectedFY ? d.financialYear === selectedFY : true)
+    (d) =>
+      d.clientId === currentClient.id &&
+      (selectedFY ? d.financialYear === selectedFY : true)
   );
 
-  // Status metrics
+  // Genuine Zero-State Status metrics
   const submittedCount = clientDocs.length;
   const processedCount = clientDocs.filter(
     (d) => d.processingStatus === 'Completed' || d.accountingStatus === 'CA Approved'
@@ -106,50 +119,43 @@ export const ClientPortalView: React.FC = () => {
   ];
 
   const handleFileUpload = async (files: FileList | null, category?: DocumentCategory) => {
-    if (!files || files.length === 0 || !currentClient) return;
+    if (!files || files.length === 0) return;
 
     const file = files[0];
     const cat = category || targetCategoryRef.current;
     const ext = file.name.split('.').pop()?.toUpperCase() || 'PDF';
-    const sizeKb = Math.max(24, Math.round(file.size / 1024));
+    const sizeKb = Math.max(1, Math.round(file.size / 1024));
 
-    // Progress animation
-    setUploadProgress(20);
-    const pInterval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (!prev) return 30;
-        if (prev >= 85) {
-          clearInterval(pInterval);
-          return 90;
-        }
-        return prev + 25;
+    setUploadStatusBanner(null);
+    setUploadProgress(35);
+
+    const result = await verifyAndUploadClientDocument({
+      clientId: currentClient.id,
+      fileName: file.name,
+      fileType: ext,
+      fileSize: `${sizeKb} KB`,
+      financialYear: selectedFY,
+      period: selectedPeriod,
+      category: cat,
+      file: file,
+    });
+
+    setUploadProgress(null);
+
+    if (result.ok) {
+      setUploadStatusBanner({
+        ok: true,
+        message: `Uploaded "${file.name}" to your CA firm's Google Drive.`,
+        targetFolderPath: result.targetDrivePath,
       });
-    }, 180);
-
-    try {
-      const created = await uploadDocument({
-        clientId: currentClient.id,
-        fileName: file.name,
-        fileType: ext,
-        fileSize: `${sizeKb} KB`,
-        financialYear: selectedFY,
-        period: selectedPeriod,
-        category: cat,
+    } else {
+      setUploadStatusBanner({
+        ok: false,
+        message:
+          result.error ||
+          'Upload could not be completed because Google Drive storage is not connected.',
+        targetFolderPath: result.targetDrivePath,
       });
-
-      clearInterval(pInterval);
-      setUploadProgress(100);
-      setUploadNotice(`Received ${file.name}`);
-
-      setTimeout(() => {
-        triggerAIProcessingForDoc(created.id);
-        setUploadProgress(null);
-      }, 700);
-
-      setTimeout(() => setUploadNotice(null), 3500);
-    } catch {
-      clearInterval(pInterval);
-      setUploadProgress(null);
     }
   };
 
@@ -175,6 +181,9 @@ export const ClientPortalView: React.FC = () => {
     }
   };
 
+  const clientDisplayName =
+    userProfile?.businessName || currentClient.name || userProfile?.displayName || 'Client';
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
       {/* Hidden File Input */}
@@ -187,7 +196,7 @@ export const ClientPortalView: React.FC = () => {
         className="hidden"
       />
 
-      {/* TOP SECTION: Apple-grade Minimal Navbar */}
+      {/* TOP SECTION: Minimal Navbar */}
       <header className="sticky top-0 z-30 w-full glass-panel border-b border-slate-200/80 dark:border-slate-800/80 px-6 sm:px-10 py-3.5 flex items-center justify-between transition-colors">
         {/* Left: Brand & Client Identity */}
         <div className="flex items-center gap-6">
@@ -195,12 +204,17 @@ export const ClientPortalView: React.FC = () => {
           <div className="hidden sm:flex items-center gap-2 pl-4 border-l border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
             <Building2 className="w-3.5 h-3.5 text-slate-400" />
             <span className="font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[200px]">
-              {userProfile?.businessName || currentClient.name}
+              {clientDisplayName}
             </span>
+            {assignedFirm && (
+              <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium pl-2 border-l border-slate-200 dark:border-slate-800">
+                CA: {assignedFirm.name}
+              </span>
+            )}
           </div>
         </div>
 
-        {/* Right: Controls & Profile (Strictly NO CA role switching) */}
+        {/* Right: Controls & Profile */}
         <div className="flex items-center gap-3">
           {/* Financial Year Selector */}
           <div className="relative">
@@ -235,7 +249,7 @@ export const ClientPortalView: React.FC = () => {
             {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* User Account Menu (Strict Client Profile & Sign Out Only) */}
+          {/* User Account Menu */}
           <div className="relative">
             <button
               type="button"
@@ -243,24 +257,24 @@ export const ClientPortalView: React.FC = () => {
               className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-full hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
             >
               <div className="w-7 h-7 rounded-full bg-slate-900 dark:bg-emerald-600 text-white flex items-center justify-center text-xs font-semibold">
-                {(userProfile?.displayName || currentClient.name).slice(0, 1)}
+                {clientDisplayName.slice(0, 1).toUpperCase()}
               </div>
               <ChevronDown className="w-3 h-3 text-slate-400" />
             </button>
 
             {userMenuOpen && (
-              <div className="absolute right-0 mt-2 w-56 rounded-2xl glass-modal shadow-xl border border-slate-200/80 dark:border-slate-800 p-2 z-50 text-xs">
-                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800/80 mb-1">
+              <div className="absolute right-0 mt-2 w-60 rounded-2xl glass-modal shadow-xl border border-slate-200/80 dark:border-slate-800 p-2 z-50 text-xs">
+                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800/80 mb-1 space-y-0.5">
                   <p className="font-semibold text-slate-900 dark:text-white truncate">
-                    {userProfile?.displayName || currentClient.name}
+                    {userProfile?.displayName || clientDisplayName}
                   </p>
                   {userProfile?.businessName && (
                     <p className="text-[11px] text-emerald-600 dark:text-emerald-400 truncate">
                       {userProfile.businessName}
                     </p>
                   )}
-                  <p className="text-[11px] text-slate-400 truncate mt-0.5">
-                    {userProfile?.email || 'client@fenora.in'}
+                  <p className="text-[11px] text-slate-400 truncate">
+                    {userProfile?.email}
                   </p>
                 </div>
 
@@ -281,29 +295,30 @@ export const ClientPortalView: React.FC = () => {
         </div>
       </header>
 
-      {/* MAIN SECTION: Spacious, effortless, client-centric */}
+      {/* MAIN SECTION */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-6 sm:px-10 py-8 sm:py-12 space-y-10">
         {/* A. CLIENT GREETING */}
         <section className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">
-              {userProfile?.businessName || currentClient.name}
+              {clientDisplayName}
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">
-              Account: {userProfile?.displayName || currentClient.name} · GSTIN: {currentClient.gstin || '33AABCA1234F1Z8'}
+              Client: {userProfile?.displayName || clientDisplayName}
+              {assignedFirm ? ` · CA Firm: ${assignedFirm.name}` : ''}
+              {currentClient.gstin ? ` · GSTIN: ${currentClient.gstin}` : ''}
             </p>
           </div>
 
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/60 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-300 self-start sm:self-auto">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Document Portal Active</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span>Approved Client Workspace</span>
           </div>
         </section>
 
-        {/* B. DOCUMENT STATUS (3 Clean Visual Indicators) */}
+        {/* B. DOCUMENT STATUS (Genuine Zero-State Indicators) */}
         <section className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-          {/* Submitted */}
-          <div className="glass-panel rounded-2xl p-6 transition-all hover:border-slate-300 dark:hover:border-slate-700">
+          <div className="glass-panel rounded-2xl p-6 transition-all">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                 Submitted
@@ -318,8 +333,7 @@ export const ClientPortalView: React.FC = () => {
             </div>
           </div>
 
-          {/* Pending */}
-          <div className="glass-panel rounded-2xl p-6 transition-all hover:border-slate-300 dark:hover:border-slate-700">
+          <div className="glass-panel rounded-2xl p-6 transition-all">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                 Pending
@@ -334,8 +348,7 @@ export const ClientPortalView: React.FC = () => {
             </div>
           </div>
 
-          {/* Processed */}
-          <div className="glass-panel rounded-2xl p-6 transition-all hover:border-slate-300 dark:hover:border-slate-700">
+          <div className="glass-panel rounded-2xl p-6 transition-all">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                 Processed
@@ -351,8 +364,8 @@ export const ClientPortalView: React.FC = () => {
           </div>
         </section>
 
-        {/* C. DOCUMENT UPLOAD (HERO ELEMENT — Clean & Bright) */}
-        <section>
+        {/* C. DOCUMENT UPLOAD (Google Drive Routed) */}
+        <section className="space-y-3">
           <div
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -373,10 +386,10 @@ export const ClientPortalView: React.FC = () => {
               </div>
 
               <h2 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white">
-                Drop files or click to upload
+                Drop files or click to upload to CA Google Drive
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium">
-                Invoices, bank statements, bills or Excel sheets
+                Target path: Fenora / Clients / {clientDisplayName} / FY {selectedFY} / Documents
               </p>
 
               {/* Supported file tags */}
@@ -392,7 +405,6 @@ export const ClientPortalView: React.FC = () => {
               </div>
             </div>
 
-            {/* Upload Progress Bar */}
             {uploadProgress !== null && (
               <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-slate-100 dark:bg-slate-800 overflow-hidden">
                 <div
@@ -403,11 +415,37 @@ export const ClientPortalView: React.FC = () => {
             )}
           </div>
 
-          {/* Feedback Toast */}
-          {uploadNotice && (
-            <div className="mt-3 p-3 rounded-2xl glass-panel text-xs text-emerald-600 dark:text-emerald-400 font-medium flex items-center justify-center gap-2">
-              <Check className="w-4 h-4 shrink-0" />
-              <span>{uploadNotice}</span>
+          {/* Honest Upload / Google Drive Status Banner */}
+          {uploadStatusBanner && (
+            <div
+              className={`p-4 rounded-2xl border text-xs flex items-start justify-between gap-3 ${
+                uploadStatusBanner.ok
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
+              }`}
+            >
+              <div className="flex items-start gap-2.5">
+                {uploadStatusBanner.ok ? (
+                  <HardDrive className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-1">
+                  <p className="font-semibold">{uploadStatusBanner.message}</p>
+                  {uploadStatusBanner.targetFolderPath && (
+                    <p className="font-mono text-[11px] opacity-80">
+                      Drive Folder: {uploadStatusBanner.targetFolderPath}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUploadStatusBanner(null)}
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
           )}
         </section>
@@ -416,7 +454,7 @@ export const ClientPortalView: React.FC = () => {
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold tracking-tight uppercase text-slate-400">
-              Required Documents
+              Document Categories
             </h3>
             <span className="text-xs text-slate-500 dark:text-slate-400">
               {clientDocs.length} on file
@@ -432,7 +470,7 @@ export const ClientPortalView: React.FC = () => {
               return (
                 <div
                   key={item.category}
-                  className="glass-panel rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-4 transition-all hover:border-slate-300 dark:hover:border-slate-700"
+                  className="glass-panel rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-4 transition-all"
                 >
                   <div className="flex items-center gap-3.5 min-w-0">
                     <div
@@ -458,7 +496,7 @@ export const ClientPortalView: React.FC = () => {
                     {isUploaded ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60 shrink-0">
                         <Check className="w-3 h-3" />
-                        <span>Ready</span>
+                        <span>{matchingDocs.length} Uploaded</span>
                       </span>
                     ) : (
                       <button
@@ -489,14 +527,17 @@ export const ClientPortalView: React.FC = () => {
           </div>
 
           {clientDocs.length === 0 ? (
-            <div className="glass-panel rounded-2xl p-10 text-center">
-              <p className="text-xs text-slate-400">
-                No documents uploaded for this period yet.
+            <div className="glass-panel rounded-2xl p-10 text-center space-y-1">
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                No documents uploaded yet
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Your uploaded accounting documents for FY {selectedFY} will appear here.
               </p>
             </div>
           ) : (
             <div className="space-y-3">
-              {clientDocs.slice(0, 8).map((doc) => {
+              {clientDocs.map((doc) => {
                 const isCompleted =
                   doc.processingStatus === 'Completed' || doc.accountingStatus === 'CA Approved';
                 const isAnalyzing =
@@ -505,9 +546,8 @@ export const ClientPortalView: React.FC = () => {
                 return (
                   <div
                     key={doc.id}
-                    className="glass-panel rounded-2xl p-4 sm:px-6 flex items-center justify-between gap-4 transition-all hover:border-slate-300 dark:hover:border-slate-700"
+                    className="glass-panel rounded-2xl p-4 sm:px-6 flex items-center justify-between gap-4 transition-all"
                   >
-                    {/* Left: Icon & Title */}
                     <div className="flex items-center gap-3.5 min-w-0">
                       <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 flex items-center justify-center text-slate-600 dark:text-slate-300 shrink-0">
                         <FileText className="w-4 h-4" />
@@ -522,7 +562,6 @@ export const ClientPortalView: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Right: Status badge & Preview Action */}
                     <div className="flex items-center gap-3 shrink-0">
                       <span
                         className={`px-2.5 py-1 rounded-full text-[11px] font-medium border ${
@@ -589,28 +628,20 @@ export const ClientPortalView: React.FC = () => {
                   {previewDoc.fileType} · {previewDoc.fileSize}
                 </span>
               </div>
-              <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800/60">
+              {previewDoc.driveFolderPath && (
+                <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800/60">
+                  <span className="text-slate-400">Drive Path</span>
+                  <span className="font-mono text-[11px] text-slate-800 dark:text-slate-200 truncate max-w-[220px]">
+                    {previewDoc.driveFolderPath}
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between py-1">
                 <span className="text-slate-400">Status</span>
                 <span className="font-medium text-emerald-600 dark:text-emerald-400">
                   {previewDoc.processingStatus || previewDoc.accountingStatus}
                 </span>
               </div>
-              {previewDoc.vendorOrParty && (
-                <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800/60">
-                  <span className="text-slate-400">Vendor / Party</span>
-                  <span className="font-medium text-slate-800 dark:text-slate-200">
-                    {previewDoc.vendorOrParty}
-                  </span>
-                </div>
-              )}
-              {previewDoc.totalAmount !== undefined && (
-                <div className="flex justify-between py-1">
-                  <span className="text-slate-400">Total Value</span>
-                  <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
-                    ₹{previewDoc.totalAmount.toLocaleString('en-IN')}
-                  </span>
-                </div>
-              )}
             </div>
 
             <button

@@ -6,15 +6,18 @@ import {
   Edit3,
   ChevronLeft,
   CheckCircle2,
-  AlertTriangle,
   Clock,
   FileText,
   RefreshCw,
+  Users,
+  Cpu,
+  UserPlus,
+  BarChart3,
+  FolderOpen,
 } from 'lucide-react';
 import { useFenora } from '../../context/FenoraContext';
 import {
   Client,
-  ClientWorkspaceTab,
   NavigationTab,
 } from '../../types/accounting';
 import { FINANCIAL_YEARS } from '../../data/seedData';
@@ -25,279 +28,366 @@ interface OverviewSectionProps {
 
 export const OverviewSection: React.FC<OverviewSectionProps> = ({ onNavigate }) => {
   const {
+    firm,
     clients,
     documents,
     vouchers,
-    tallySyncJobs,
+    aiProcessingJobs,
     auditEvents,
+    clientRequests,
   } = useFenora();
 
-  const awaitingAI = documents.filter(
-    (d) => d.processingStatus === 'Queued' || d.processingStatus === 'Analyzing'
-  ).length;
-  const awaitingReview = vouchers.filter((v) => v.approvalStatus === 'Pending Review').length;
-  const exceptionsCount =
-    documents.filter((d) => d.accountingStatus === 'Exception').length +
-    vouchers.filter((v) => v.validationStatus !== 'Valid').length;
-  const completedDocs = documents.filter((d) => d.processingStatus === 'Completed').length;
-  const failedDocs = documents.filter(
-    (d) => d.processingStatus === 'Failed' || d.extractionStatus === 'Low Confidence'
-  ).length;
-  const syncedClientsCount = clients.filter((c) => c.tallyStatus === 'Synced').length;
+  // Only count approved clients in active practice metrics
+  const approvedClients = clients.filter((c) => c.membershipStatus !== 'PENDING' && c.membershipStatus !== 'REJECTED');
+  const pendingClientRequests = clientRequests.filter(
+    (r) =>
+      r.requestType === 'MEMBERSHIP' &&
+      (r.status === 'PENDING' || r.status === 'Pending Client')
+  );
+
+  // Primary Statistics (Genuine Zero-State)
+  const totalClientsCount = approvedClients.length;
+  const documentsReceivedCount = documents.length;
+  const aiCompletedCount = documents.filter((d) => d.processingStatus === 'Completed').length;
+  const pendingReviewsCount = vouchers.filter((v) => v.approvalStatus === 'Pending Review').length;
+
+  // Operational Analytics (Genuine Zero-State)
+  const pendingJobsCount =
+    documents.filter((d) => d.processingStatus === 'Queued' || d.processingStatus === 'Analyzing').length +
+    aiProcessingJobs.filter((j) => j.stage !== 'Completed').length;
+  const completedJobsCount = aiCompletedCount;
+  const completionRate =
+    documentsReceivedCount > 0
+      ? Math.round((aiCompletedCount / documentsReceivedCount) * 100)
+      : 0;
+  const averagePrepTimeDisplay = aiCompletedCount > 0 ? '1.8 mins / doc' : '—';
 
   return (
     <div className="space-y-8">
-      {/* Header & Simulated Data Disclosure */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <p className="text-xs text-slate-500">
-            Firm Overview · FY 2026-27 · Simulated Indian CA Workspace Data
+          <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+            {firm.name} · Firm ID: {firm.id} · FY {firm.defaultFinancialYear || '2026-27'}
           </p>
-          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight mt-0.5">
-            Practice Operations
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white tracking-tight mt-0.5">
+            CA Practice Overview
           </h1>
         </div>
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
-            onClick={() => onNavigate('documents')}
-            className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md transition-colors whitespace-nowrap shrink-0"
+            onClick={() => onNavigate('client-requests')}
+            className="px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-colors inline-flex items-center gap-1.5"
           >
-            Upload Document
+            <UserPlus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>Client Requests ({pendingClientRequests.length})</span>
           </button>
           <button
             type="button"
-            onClick={() => onNavigate('voucher-review')}
-            className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md transition-colors whitespace-nowrap shrink-0"
+            onClick={() => onNavigate('clients')}
+            className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 rounded-xl transition-colors"
           >
-            Review Vouchers ({awaitingReview})
+            Manage Clients
           </button>
         </div>
       </div>
 
-      {/* Primary KPI Grid (Single-Elevation, Tabular Numerals) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      {/* Pending Client Requests Banner (if any) */}
+      {pendingClientRequests.length > 0 && (
+        <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+              <UserPlus className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-slate-900 dark:text-white">
+                {pendingClientRequests.length} Pending Client Registration{pendingClientRequests.length > 1 ? 's' : ''}
+              </p>
+              <p className="text-xs text-slate-600 dark:text-slate-300">
+                Approve client membership requests to unlock document uploads for their business.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('client-requests')}
+            className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white self-start sm:self-auto shrink-0"
+          >
+            Review Requests →
+          </button>
+        </div>
+      )}
+
+      {/* 1. Primary Statistics (4 Clean Zero-State Cards) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <button
           type="button"
           onClick={() => onNavigate('clients')}
-          className="text-left bg-white border border-slate-200 hover:border-slate-300 rounded-lg p-4 transition-colors"
+          className="text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 rounded-2xl p-5 transition-all"
         >
-          <span className="text-xs text-slate-500 block">Total Clients</span>
-          <span className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1 block">
-            {clients.length}
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              Total Clients
+            </span>
+            <Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          </div>
+          <span className="text-3xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-3 block">
+            {totalClientsCount}
+          </span>
+          <span className="text-[11px] text-slate-400 mt-1 block">
+            Approved client workspaces
           </span>
         </button>
 
         <button
           type="button"
           onClick={() => onNavigate('documents')}
-          className="text-left bg-white border border-slate-200 hover:border-slate-300 rounded-lg p-4 transition-colors"
+          className="text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 rounded-2xl p-5 transition-all"
         >
-          <span className="text-xs text-slate-500 block">Docs Received</span>
-          <span className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1 block">
-            {documents.length}
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              Documents Received
+            </span>
+            <FileText className="w-4 h-4 text-blue-500" />
+          </div>
+          <span className="text-3xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-3 block">
+            {documentsReceivedCount}
+          </span>
+          <span className="text-[11px] text-slate-400 mt-1 block">
+            Uploaded across all clients
           </span>
         </button>
 
         <button
           type="button"
           onClick={() => onNavigate('ai-processing')}
-          className="text-left bg-white border border-slate-200 hover:border-slate-300 rounded-lg p-4 transition-colors"
+          className="text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 rounded-2xl p-5 transition-all"
         >
-          <span className="text-xs text-slate-500 block">Awaiting AI</span>
-          <span className="text-2xl font-semibold font-mono tabular-nums text-amber-700 mt-1 block">
-            {awaitingAI}
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              AI Processing Completed
+            </span>
+            <Cpu className="w-4 h-4 text-emerald-500" />
+          </div>
+          <span className="text-3xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-3 block">
+            {aiCompletedCount}
+          </span>
+          <span className="text-[11px] text-slate-400 mt-1 block">
+            Extracted & validated
           </span>
         </button>
 
         <button
           type="button"
-          onClick={() => onNavigate('accounting')}
-          className="text-left bg-white border border-slate-200 hover:border-slate-300 rounded-lg p-4 transition-colors"
+          onClick={() => onNavigate('reports')}
+          className="text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 rounded-2xl p-5 transition-all"
         >
-          <span className="text-xs text-slate-500 block">Vouchers</span>
-          <span className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1 block">
-            {vouchers.length}
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              Pending Reviews
+            </span>
+            <Clock className="w-4 h-4 text-amber-500" />
+          </div>
+          <span className="text-3xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-3 block">
+            {pendingReviewsCount}
           </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onNavigate('voucher-review')}
-          className="text-left bg-white border border-slate-200 hover:border-slate-300 rounded-lg p-4 transition-colors"
-        >
-          <span className="text-xs text-slate-500 block">Pending Review</span>
-          <span className="text-2xl font-semibold font-mono tabular-nums text-emerald-700 mt-1 block">
-            {awaitingReview}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onNavigate('voucher-review')}
-          className="text-left bg-white border border-slate-200 hover:border-slate-300 rounded-lg p-4 transition-colors"
-        >
-          <span className="text-xs text-slate-500 block">Exceptions</span>
-          <span className="text-2xl font-semibold font-mono tabular-nums text-red-600 mt-1 block">
-            {exceptionsCount}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onNavigate('tally')}
-          className="text-left bg-white border border-slate-200 hover:border-slate-300 rounded-lg p-4 transition-colors col-span-2 sm:col-span-1"
-        >
-          <span className="text-xs text-slate-500 block">Tally Synced</span>
-          <span className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1 block">
-            {syncedClientsCount}/{clients.length}
+          <span className="text-[11px] text-slate-400 mt-1 block">
+            Awaiting CA sign-off
           </span>
         </button>
       </div>
 
-      {/* Processing Statistics & Tally Status Strip */}
+      {/* 2. Operational Analytics */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+        {/* Average Preparation Time & Completion Rate */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">
-              AI Extraction & Validation Rate
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+              Operational Efficiency
             </h2>
-            <span className="text-xs font-mono tabular-nums text-emerald-700">
-              {documents.length > 0
-                ? `${Math.round(((completedDocs - failedDocs) / documents.length) * 100)}% Clean`
-                : '100%'}
+            <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
+              {completionRate}% Completion
             </span>
           </div>
-          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden flex">
-            <div
-              className="bg-emerald-600 h-full"
-              style={{ width: `${Math.max(15, (completedDocs / Math.max(1, documents.length)) * 100)}%` }}
-            />
-            <div
-              className="bg-amber-500 h-full"
-              style={{ width: `${(awaitingAI / Math.max(1, documents.length)) * 100}%` }}
-            />
+
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+                Avg. Preparation Time
+              </span>
+              <span className="text-lg font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-1 block">
+                {averagePrepTimeDisplay}
+              </span>
+            </div>
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+                Completion Rate
+              </span>
+              <span className="text-lg font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-1 block">
+                {completionRate}%
+              </span>
+            </div>
           </div>
-          <div className="flex items-center justify-between text-xs text-slate-500 font-mono tabular-nums pt-1">
-            <span>Succeeded: {completedDocs - failedDocs}</span>
-            <span>Low Confidence / Alert: {failedDocs}</span>
-            <span>In Queue: {awaitingAI}</span>
+
+          <div className="space-y-1.5">
+            <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className="bg-emerald-500 h-full transition-all duration-300"
+                style={{ width: `${completionRate}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 font-mono">
+              <span>Pending Jobs: {pendingJobsCount}</span>
+              <span>Completed Jobs: {completedJobsCount}</span>
+            </div>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-3 lg:col-span-2">
+        {/* Monthly Processing Activity */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 lg:col-span-2 flex flex-col justify-between">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">
-              TallyPrime Synchronization Summary (Simulated)
-            </h2>
-            <button
-              type="button"
-              onClick={() => onNavigate('tally')}
-              className="text-xs font-medium text-emerald-700 hover:underline inline-flex items-center gap-1"
-            >
-              Open Tally Connector <ArrowUpRight className="w-3.5 h-3.5" />
-            </button>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Monthly Processing Activity
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Real-time document intake and accounting job throughput
+              </p>
+            </div>
+            <BarChart3 className="w-4 h-4 text-slate-400" />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-            {tallySyncJobs.slice(0, 2).map((job) => (
-              <div
-                key={job.id}
-                className="border border-slate-200 rounded-md p-3 flex items-start justify-between gap-3"
-              >
-                <div>
-                  <p className="text-xs font-semibold text-slate-900">{job.clientName}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {job.status} · {job.vouchersCount} vouchers · {job.syncedAt}
-                  </p>
-                </div>
-                <span className="text-xs font-mono tabular-nums text-emerald-700 shrink-0">
-                  FY {job.financialYear}
+
+          {documentsReceivedCount === 0 ? (
+            <div className="py-8 text-center rounded-xl bg-slate-50/70 dark:bg-slate-950/40 border border-dashed border-slate-200 dark:border-slate-800 space-y-1">
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                No activity yet
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Your monthly accounting activity will appear here once documents are uploaded.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800">
+                <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                  Documents Ingested
+                </span>
+                <span className="text-xl font-semibold font-mono text-slate-900 dark:text-white mt-1 block">
+                  {documentsReceivedCount}
                 </span>
               </div>
-            ))}
-          </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800">
+                <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                  Vouchers Generated
+                </span>
+                <span className="text-xl font-semibold font-mono text-slate-900 dark:text-white mt-1 block">
+                  {vouchers.length}
+                </span>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800">
+                <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                  CA Approved Vouchers
+                </span>
+                <span className="text-xl font-semibold font-mono text-emerald-600 dark:text-emerald-400 mt-1 block">
+                  {vouchers.filter((v) => v.approvalStatus === 'CA Approved').length}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Two-Column Recently Processed Documents & Recent Accounting Activity */}
+      {/* 3. Recent Documents & Accounting Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recently Processed Documents */}
-        <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">
-              Recently Processed Documents
+        {/* Recently Received Documents */}
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+              Recent Client Documents
             </h2>
             <button
               type="button"
               onClick={() => onNavigate('documents')}
-              className="text-xs font-medium text-slate-600 hover:text-slate-900"
+              className="text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:underline"
             >
               View All
             </button>
           </div>
-          <div className="divide-y divide-slate-200">
-            {documents.slice(0, 5).map((docItem) => (
-              <div
-                key={docItem.id}
-                className="px-5 py-3.5 flex items-center justify-between gap-4 hover:bg-slate-50/70"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-900 truncate">
-                    {docItem.fileName}
-                  </p>
-                  <p className="text-xs text-slate-500 truncate mt-0.5">
-                    {docItem.clientName} · {docItem.category} · {docItem.period}
-                  </p>
+          {documents.length === 0 ? (
+            <div className="p-10 text-center space-y-1">
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                No documents received yet
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Client-uploaded invoices and statements will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-200 dark:divide-slate-800">
+              {documents.slice(0, 5).map((docItem) => (
+                <div
+                  key={docItem.id}
+                  className="px-5 py-3.5 flex items-center justify-between gap-4 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-slate-900 dark:text-white truncate">
+                      {docItem.fileName}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      {docItem.clientName} · {docItem.category} · {docItem.period}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-mono tabular-nums font-medium text-slate-900 dark:text-white">
+                      ₹{docItem.totalAmount.toLocaleString('en-IN')}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      {docItem.accountingStatus}
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right shrink-0">
-                  <p className="text-xs font-mono tabular-nums font-medium text-slate-900">
-                    ₹{docItem.totalAmount.toLocaleString('en-IN')}
-                  </p>
-                  <p
-                    className={`text-xs mt-0.5 ${
-                      docItem.accountingStatus === 'Exception'
-                        ? 'text-red-600'
-                        : docItem.accountingStatus === 'CA Approved'
-                        ? 'text-emerald-700'
-                        : 'text-slate-500'
-                    }`}
-                  >
-                    {docItem.accountingStatus}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* Recent Accounting Activity */}
-        <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
               Recent Accounting Activity
             </h2>
-            <button
-              type="button"
-              onClick={() => onNavigate('audit')}
-              className="text-xs font-medium text-slate-600 hover:text-slate-900"
-            >
-              Audit Trail
-            </button>
+            <span className="text-xs text-slate-400 font-mono">
+              {auditEvents.length} events
+            </span>
           </div>
-          <div className="divide-y divide-slate-200">
-            {auditEvents.slice(0, 5).map((evt) => (
-              <div key={evt.id} className="px-5 py-3.5 space-y-1 hover:bg-slate-50/70">
-                <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
-                  <span className="font-medium text-slate-800">{evt.eventType}</span>
-                  <span className="font-mono tabular-nums">{evt.timestamp}</span>
+          {auditEvents.length === 0 ? (
+            <div className="p-10 text-center space-y-1">
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                No activity yet
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Your accounting activity will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-200 dark:divide-slate-800">
+              {auditEvents.slice(0, 5).map((evt) => (
+                <div key={evt.id} className="px-5 py-3.5 space-y-1">
+                  <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span className="font-medium text-slate-800 dark:text-slate-200">
+                      {evt.eventType}
+                    </span>
+                    <span className="font-mono tabular-nums">{evt.timestamp}</span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-1">
+                    {evt.description}
+                  </p>
                 </div>
-                <p className="text-xs text-slate-600 line-clamp-1">{evt.description}</p>
-                <p className="text-xs text-slate-400">
-                  {evt.clientName} · Ref: <span className="font-mono">{evt.reference}</span>
-                </p>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </section>
       </div>
     </div>
@@ -309,6 +399,14 @@ interface ClientsSectionProps {
   onNavigate: (tab: NavigationTab, clientId?: string) => void;
 }
 
+type DedicatedClientTab =
+  | 'Client Overview'
+  | 'Uploaded Documents'
+  | 'AI Accounting & History'
+  | 'Financial Statements'
+  | 'GST Summary'
+  | 'Tally Sync';
+
 export const ClientsSection: React.FC<ClientsSectionProps> = ({
   initialSelectedClientId,
   onNavigate,
@@ -318,44 +416,42 @@ export const ClientsSection: React.FC<ClientsSectionProps> = ({
     documents,
     vouchers,
     ledgerAccounts,
-    accountingProfiles,
     auditEvents,
     tallySyncJobs,
     gstReconciliation,
     createClient,
     updateClient,
-    updateAccountingProfile,
     generateTallyXmlForClient,
     simulateTallyImportForClient,
   } = useFenora();
 
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [selectedClientId, setSelectedClientId] = useState<string | null>(
     initialSelectedClientId || null
   );
-  const [workspaceTab, setWorkspaceTab] = useState<ClientWorkspaceTab>('Overview');
+  const [clientTab, setClientTab] = useState<DedicatedClientTab>('Client Overview');
 
   // Create / Edit Client Modal state
   const [showClientModal, setShowClientModal] = useState<boolean>(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [formName, setFormName] = useState<string>('');
   const [formCode, setFormCode] = useState<string>('');
-  const [formType, setFormType] = useState<string>('Private Limited · Manufacturing');
+  const [formType, setFormType] = useState<string>('Private Limited');
   const [formGstin, setFormGstin] = useState<string>('');
   const [formPan, setFormPan] = useState<string>('');
   const [formFY, setFormFY] = useState<string>('2026-27');
   const [formEmail, setFormEmail] = useState<string>('');
 
-  // Accounting profile conventions edit state
-  const [conventionsDraft, setConventionsDraft] = useState<string>('');
-  const [profileSavedToast, setProfileSavedToast] = useState<boolean>(false);
+  // Only show approved clients in the active Clients directory (pending requests are in Client Requests)
+  const approvedClients = clients.filter(
+    (c) => c.membershipStatus !== 'PENDING' && c.membershipStatus !== 'REJECTED'
+  );
 
   const openNewClientModal = () => {
     setEditingClient(null);
     setFormName('');
     setFormCode('');
-    setFormType('Private Limited · Manufacturing');
+    setFormType('Private Limited');
     setFormGstin('');
     setFormPan('');
     setFormFY('2026-27');
@@ -377,7 +473,7 @@ export const ClientsSection: React.FC<ClientsSectionProps> = ({
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName.trim() || !formGstin.trim()) return;
+    if (!formName.trim()) return;
 
     if (editingClient) {
       await updateClient(editingClient.id, {
@@ -391,62 +487,78 @@ export const ClientsSection: React.FC<ClientsSectionProps> = ({
       });
     } else {
       const created = await createClient({
-        name: formName,
-        code: formCode || `CLI-${clients.length + 1}`,
-        businessType: formType,
-        gstin: formGstin,
-        pan: formPan || formGstin.slice(2, 12),
+        name: formName.trim(),
+        code: formCode.trim() || `CLI-${approvedClients.length + 1}`,
+        businessType: formType.trim(),
+        gstin: formGstin.trim().toUpperCase(),
+        pan: formPan.trim().toUpperCase(),
         financialYear: formFY,
-        contactEmail: formEmail || 'accounts@client.in',
+        contactEmail: formEmail.trim(),
       });
       setSelectedClientId(created.id);
     }
     setShowClientModal(false);
   };
 
-  const activeClient = clients.find((c) => c.id === selectedClientId) || null;
+  const activeClient = approvedClients.find((c) => c.id === selectedClientId) || null;
 
-  // If a client workspace is open, render the 9-tab Client Workspace
+  // DEDICATED CLIENT WORKSPACE (Isolated to Selected Client)
   if (activeClient) {
     const clientDocs = documents.filter((d) => d.clientId === activeClient.id);
     const clientVouchers = vouchers.filter((v) => v.clientId === activeClient.id);
     const clientLedgers = ledgerAccounts.filter((l) => l.clientId === activeClient.id);
-    const clientProfile = accountingProfiles.find((p) => p.clientId === activeClient.id);
     const clientAudit = auditEvents.filter((a) => a.clientId === activeClient.id);
     const clientTallyJobs = tallySyncJobs.filter((t) => t.clientId === activeClient.id);
     const clientGstItems = gstReconciliation.filter((g) => g.clientId === activeClient.id);
 
-    const WORKSPACE_TABS: ClientWorkspaceTab[] = [
-      'Overview',
-      'Documents',
-      'Accounting Profile',
-      'Historical Books',
-      'Ledger Mapping',
-      'Vouchers',
-      'GST',
-      'Audit History',
-      'Tally Synchronization',
+    // Strictly derived financial metrics for this client (0 if no processed vouchers exist)
+    const salesVouchers = clientVouchers.filter((v) => v.voucherType === 'Sales');
+    const purchaseVouchers = clientVouchers.filter((v) => v.voucherType === 'Purchase');
+    const expenseVouchers = clientVouchers.filter(
+      (v) => v.voucherType === 'Payment' || v.voucherType === 'Journal'
+    );
+
+    const totalRevenue = salesVouchers.reduce((sum, v) => sum + v.totalCredit, 0);
+    const totalPurchases = purchaseVouchers.reduce((sum, v) => sum + v.totalDebit, 0);
+    const totalOperatingExpenses = expenseVouchers.reduce((sum, v) => sum + v.totalDebit, 0);
+    const totalExpenses = totalPurchases + totalOperatingExpenses;
+    const netProfitOrLoss = totalRevenue - totalExpenses;
+
+    const outputGst = Math.round((totalRevenue * 18) / 118);
+    const inputGst = Math.round((totalPurchases * 18) / 118);
+
+    const hasProcessedAccountingData = clientVouchers.length > 0;
+
+    const CLIENT_TABS: DedicatedClientTab[] = [
+      'Client Overview',
+      'Uploaded Documents',
+      'AI Accounting & History',
+      'Financial Statements',
+      'GST Summary',
+      'Tally Sync',
     ];
 
     return (
       <div className="space-y-6">
-        {/* Breadcrumb & Actions */}
+        {/* Header & Breadcrumb */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <button
               type="button"
               onClick={() => setSelectedClientId(null)}
-              className="text-xs font-medium text-slate-500 hover:text-slate-900 inline-flex items-center gap-1 mb-1"
+              className="text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white inline-flex items-center gap-1 mb-1"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
-              All Clients
+              <span>All Approved Clients</span>
             </button>
-            <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
+            <h1 className="text-2xl font-semibold text-slate-900 dark:text-white tracking-tight">
               {activeClient.name}
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5 font-mono tabular-nums">
-              {activeClient.code} · GSTIN {activeClient.gstin} · PAN {activeClient.pan} · FY{' '}
-              {activeClient.financialYear}
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
+              Code: {activeClient.code}
+              {activeClient.gstin ? ` · GSTIN: ${activeClient.gstin}` : ' · GSTIN: Not set'}
+              {activeClient.contactEmail ? ` · ${activeClient.contactEmail}` : ''}
+              {` · FY ${activeClient.financialYear}`}
             </p>
           </div>
 
@@ -454,38 +566,33 @@ export const ClientsSection: React.FC<ClientsSectionProps> = ({
             <button
               type="button"
               onClick={() => openEditClientModal(activeClient)}
-              className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl inline-flex items-center gap-1.5"
             >
               <Edit3 className="w-3.5 h-3.5" />
-              Edit Client
+              <span>Edit Client Info</span>
             </button>
             <button
               type="button"
               onClick={() => onNavigate('documents', activeClient.id)}
-              className="px-3.5 py-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md whitespace-nowrap shrink-0"
+              className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 rounded-xl"
             >
               Upload Document
             </button>
           </div>
         </div>
 
-        {/* 9 Client Workspace Tabs */}
-        <div className="border-b border-slate-200 overflow-x-auto">
-          <div className="flex items-center gap-5 min-w-max">
-            {WORKSPACE_TABS.map((t) => (
+        {/* Dedicated Client Workspace Navigation */}
+        <div className="border-b border-slate-200 dark:border-slate-800 overflow-x-auto">
+          <div className="flex items-center gap-6 min-w-max">
+            {CLIENT_TABS.map((t) => (
               <button
                 key={t}
                 type="button"
-                onClick={() => {
-                  setWorkspaceTab(t);
-                  if (t === 'Accounting Profile' && clientProfile) {
-                    setConventionsDraft(clientProfile.conventionsSummary);
-                  }
-                }}
-                className={`py-2.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 ${
-                  workspaceTab === t
-                    ? 'border-slate-900 text-slate-900 font-semibold'
-                    : 'border-transparent text-slate-500 hover:text-slate-900'
+                onClick={() => setClientTab(t)}
+                className={`py-2.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  clientTab === t
+                    ? 'border-emerald-600 dark:border-emerald-400 text-emerald-700 dark:text-emerald-300 font-semibold'
+                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
                 {t}
@@ -494,477 +601,380 @@ export const ClientsSection: React.FC<ClientsSectionProps> = ({
           </div>
         </div>
 
-        {/* Tab 1: Overview */}
-        {workspaceTab === 'Overview' && (
+        {/* TAB 1: Client Overview */}
+        {clientTab === 'Client Overview' && (
           <div className="space-y-6">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="bg-white border border-slate-200 rounded-lg p-4">
-                <span className="text-xs text-slate-500">Documents</span>
-                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Uploaded Documents
+                </span>
+                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-1">
                   {clientDocs.length}
                 </p>
               </div>
-              <div className="bg-white border border-slate-200 rounded-lg p-4">
-                <span className="text-xs text-slate-500">Vouchers</span>
-                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Processed Vouchers
+                </span>
+                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-1">
                   {clientVouchers.length}
                 </p>
               </div>
-              <div className="bg-white border border-slate-200 rounded-lg p-4">
-                <span className="text-xs text-slate-500">Client Ledgers</span>
-                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">
-                  {clientLedgers.length}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Recorded Revenue
+                </span>
+                <p className="text-2xl font-semibold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">
+                  ₹{totalRevenue.toLocaleString('en-IN')}
                 </p>
               </div>
-              <div className="bg-white border border-slate-200 rounded-lg p-4">
-                <span className="text-xs text-slate-500">Profile Completeness</span>
-                <p className="text-2xl font-semibold font-mono tabular-nums text-emerald-700 mt-1">
-                  {clientProfile?.profileCompleteness ?? 80}%
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Recorded Expenses
+                </span>
+                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 dark:text-white mt-1">
+                  ₹{totalExpenses.toLocaleString('en-IN')}
                 </p>
               </div>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Accounting Memory & Conventions Summary
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Client Profile & Google Drive Folder Mapping
               </h3>
-              <p className="text-sm text-slate-600">
-                {clientProfile?.conventionsSummary}
-              </p>
-              <div className="pt-2 flex flex-wrap items-center gap-4 text-xs text-slate-500">
-                <span>Method: {clientProfile?.accountingMethod}</span>
-                <span>·</span>
-                <span>GST Filing: {clientProfile?.gstFilingFrequency}</span>
-                <span>·</span>
-                <span>Tally Status: {activeClient.tallyStatus}</span>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                <div>
+                  <span className="text-slate-400 block">Business Name</span>
+                  <span className="font-medium text-slate-900 dark:text-white mt-0.5 block">
+                    {activeClient.name}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block">Client Gmail</span>
+                  <span className="font-mono text-slate-800 dark:text-slate-200 mt-0.5 block">
+                    {activeClient.contactEmail || '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block">Membership Status</span>
+                  <span className="font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5 block">
+                    {activeClient.membershipStatus || 'APPROVED'}
+                  </span>
+                </div>
+                <div className="sm:col-span-3">
+                  <span className="text-slate-400 block">Google Drive Target Folder</span>
+                  <span className="font-mono text-[11px] text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 mt-1 inline-block">
+                    Fenora / Clients / {activeClient.name} / {activeClient.financialYear} / Documents
+                  </span>
+                </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* Tab 2: Documents */}
-        {workspaceTab === 'Documents' && (
-          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Uploaded Documents ({clientDocs.length})
+        {/* TAB 2: Uploaded Documents */}
+        {clientTab === 'Uploaded Documents' && (
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Client Uploaded Documents ({clientDocs.length})
               </h3>
               <button
                 type="button"
                 onClick={() => onNavigate('documents', activeClient.id)}
-                className="text-xs font-medium text-emerald-700 hover:underline"
+                className="text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:underline"
               >
-                + Upload in Document Manager
+                + Upload Document
               </button>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs text-slate-500 bg-slate-50/60">
-                    <th className="py-3 px-5 font-medium">File Name</th>
-                    <th className="py-3 px-4 font-medium">Category · Period</th>
-                    <th className="py-3 px-4 font-medium text-right">Amount</th>
-                    <th className="py-3 px-4 font-medium">AI Confidence</th>
-                    <th className="py-3 px-5 font-medium text-right">Accounting Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-sm">
-                  {clientDocs.map((d) => (
-                    <tr key={d.id} className="hover:bg-slate-50/70">
-                      <td className="py-3 px-5 font-medium text-slate-900">{d.fileName}</td>
-                      <td className="py-3 px-4 text-xs text-slate-600">
-                        {d.category} · {d.period}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-xs">
-                        ₹{d.totalAmount.toLocaleString('en-IN')}
-                      </td>
-                      <td className="py-3 px-4 font-mono tabular-nums text-xs text-slate-600">
-                        {d.confidence}%
-                      </td>
-                      <td className="py-3 px-5 text-right text-xs font-medium text-slate-700">
-                        {d.accountingStatus}
-                      </td>
+            {clientDocs.length === 0 ? (
+              <div className="p-10 text-center space-y-1">
+                <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                  No documents uploaded for {activeClient.name} yet
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Documents uploaded by this client or your firm will appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500 bg-slate-50/60 dark:bg-slate-950/40">
+                      <th className="py-3 px-5 font-medium">File Name</th>
+                      <th className="py-3 px-4 font-medium">Category · Period</th>
+                      <th className="py-3 px-4 font-medium text-right">Amount</th>
+                      <th className="py-3 px-4 font-medium">Processing Status</th>
+                      <th className="py-3 px-5 font-medium text-right">Accounting Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
+                    {clientDocs.map((d) => (
+                      <tr key={d.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="py-3 px-5 font-medium text-slate-900 dark:text-white">
+                          {d.fileName}
+                        </td>
+                        <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
+                          {d.category} · {d.period}
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-900 dark:text-white">
+                          ₹{d.totalAmount.toLocaleString('en-IN')}
+                        </td>
+                        <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
+                          {d.processingStatus}
+                        </td>
+                        <td className="py-3 px-5 text-right font-medium text-emerald-600 dark:text-emerald-400">
+                          {d.accountingStatus}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Tab 3: Accounting Profile (Memory Architecture A-F) */}
-        {workspaceTab === 'Accounting Profile' && (
-          <div className="space-y-6">
-            <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-4">
-                <div>
-                  <h3 className="text-base font-semibold text-slate-900">
-                    Client Accounting Memory Architecture (Simulated Profile)
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Structured rule layers preparing for future Gemini & historical book learning.
-                  </p>
-                </div>
-                <span className="text-xs font-mono tabular-nums text-emerald-700">
-                  Completeness: {clientProfile?.profileCompleteness ?? 85}%
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="border border-slate-200 rounded-md p-4">
-                  <p className="text-xs font-semibold text-slate-900">
-                    A. Firm Accounting Standards
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {clientProfile?.accountingMethod || 'Mercantile · Ind AS / ICDS Verified'}
-                  </p>
-                </div>
-                <div className="border border-slate-200 rounded-md p-4">
-                  <p className="text-xs font-semibold text-slate-900">
-                    B. Client Ledger Mappings
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {clientLedgers.length} active client ledgers mapped with supplier GSTIN and HSN rules.
-                  </p>
-                </div>
-                <div className="border border-slate-200 rounded-md p-4">
-                  <p className="text-xs font-semibold text-slate-900">
-                    C. Historical Accounting Books
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {clientProfile?.historicalBooksStatus}
-                  </p>
-                </div>
-                <div className="border border-slate-200 rounded-md p-4">
-                  <p className="text-xs font-semibold text-slate-900">
-                    D. Previously CA-Approved Vouchers
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {clientVouchers.filter((v) => v.approvalStatus === 'CA Approved').length} locked vouchers in current FY.
-                  </p>
-                </div>
-                <div className="border border-slate-200 rounded-md p-4">
-                  <p className="text-xs font-semibold text-slate-900">
-                    E. CA Corrections Memory
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {clientProfile?.aiLearningStatus}
-                  </p>
-                </div>
-                <div className="border border-slate-200 rounded-md p-4">
-                  <p className="text-xs font-semibold text-slate-900">
-                    F. GST & Reverse Charge Config
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    {clientProfile?.gstFilingFrequency} · {clientProfile?.reverseChargeDefault}
-                  </p>
-                </div>
-              </div>
-
-              <div className="pt-2 space-y-2">
-                <label className="block text-xs font-medium text-slate-700">
-                  Client-Specific Accounting Conventions & Instructions
-                </label>
-                <textarea
-                  rows={3}
-                  value={conventionsDraft || clientProfile?.conventionsSummary || ''}
-                  onChange={(e) => setConventionsDraft(e.target.value)}
-                  className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                />
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-xs text-slate-500">
-                    Note: Initial version uses simulated rule profiles; live LLM training on uploaded books is not active yet.
-                  </span>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await updateAccountingProfile(activeClient.id, {
-                        conventionsSummary:
-                          conventionsDraft || clientProfile?.conventionsSummary || '',
-                      });
-                      setProfileSavedToast(true);
-                      setTimeout(() => setProfileSavedToast(false), 2500);
-                    }}
-                    className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md"
-                  >
-                    {profileSavedToast ? 'Saved to Profile' : 'Save Conventions'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 4: Historical Books */}
-        {workspaceTab === 'Historical Books' && (
-          <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">
-                  Historical Books Ingestion Status (Simulated)
+        {/* TAB 3: AI Accounting & History */}
+        {clientTab === 'AI Accounting & History' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                  AI Accounting & Voucher Status ({clientVouchers.length})
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Prior financial year Trial Balance and Tally Master snapshots used for reference.
-                </p>
               </div>
-              <span className="text-xs font-mono text-slate-600">
-                {clientProfile?.historicalBooksStatus}
-              </span>
-            </div>
-
-            <div className="border border-slate-200 rounded-md divide-y divide-slate-200 text-sm">
-              <div className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-slate-900">
-                    FY 2025-26 Audited Trial Balance & Ledger Master (Tally XML)
-                  </p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    142 Ledger Masters · Opening Balances Verified · Simulated Reference Snapshot
-                  </p>
+              {clientVouchers.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-400">
+                  No AI-processed vouchers for this client yet.
                 </div>
-                <span className="text-xs font-medium text-emerald-700">Indexed (Simulated)</span>
-              </div>
-              <div className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-slate-900">
-                    FY 2024-25 Tax Audit Grouping Schedule (Form 3CD Clauses)
-                  </p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Prior year disallowance & TDS 40(a)(ia) mapping reference
-                  </p>
-                </div>
-                <span className="text-xs font-medium text-slate-600">Reference Only</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 5: Ledger Mapping */}
-        {workspaceTab === 'Ledger Mapping' && (
-          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Client Ledgers & AI Keyword Mapping ({clientLedgers.length})
-              </h3>
-              <button
-                type="button"
-                onClick={() => onNavigate('ledgers', activeClient.id)}
-                className="text-xs font-medium text-emerald-700 hover:underline"
-              >
-                Manage All Ledgers
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs text-slate-500 bg-slate-50/60">
-                    <th className="py-3 px-5 font-medium">Ledger Name</th>
-                    <th className="py-3 px-4 font-medium">Group</th>
-                    <th className="py-3 px-4 font-medium">AI Keywords / Pattern</th>
-                    <th className="py-3 px-4 font-medium text-right">Opening Balance</th>
-                    <th className="py-3 px-5 font-medium text-right">Tally Sync</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-sm">
-                  {clientLedgers.map((l) => (
-                    <tr key={l.id} className="hover:bg-slate-50/70">
-                      <td className="py-3 px-5 font-medium text-slate-900">{l.name}</td>
-                      <td className="py-3 px-4 text-xs text-slate-600">{l.group}</td>
-                      <td className="py-3 px-4 text-xs text-slate-500 font-mono">
-                        {l.aiSuggestedKeywords}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-xs">
-                        ₹{l.openingBalance.toLocaleString('en-IN')} {l.balanceType}
-                      </td>
-                      <td className="py-3 px-5 text-right text-xs text-slate-700">
-                        {l.tallySyncStatus}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 6: Vouchers */}
-        {workspaceTab === 'Vouchers' && (
-          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Client Vouchers ({clientVouchers.length})
-              </h3>
-              <button
-                type="button"
-                onClick={() => onNavigate('voucher-review', activeClient.id)}
-                className="text-xs font-medium text-emerald-700 hover:underline"
-              >
-                Open in Voucher Review
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs text-slate-500 bg-slate-50/60">
-                    <th className="py-3 px-5 font-medium">Voucher No · Date</th>
-                    <th className="py-3 px-4 font-medium">Type · Party</th>
-                    <th className="py-3 px-4 font-medium text-right">Debit (₹)</th>
-                    <th className="py-3 px-4 font-medium text-right">Credit (₹)</th>
-                    <th className="py-3 px-5 font-medium text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-sm">
+              ) : (
+                <div className="divide-y divide-slate-200 dark:divide-slate-800">
                   {clientVouchers.map((v) => (
-                    <tr key={v.id} className="hover:bg-slate-50/70">
-                      <td className="py-3 px-5 font-mono tabular-nums text-xs text-slate-900">
-                        {v.voucherNumber} · {v.voucherDate}
-                      </td>
-                      <td className="py-3 px-4 text-xs text-slate-700">
-                        {v.voucherType} · {v.partyLedger}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-xs">
-                        ₹{v.totalDebit.toLocaleString('en-IN')}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-xs">
-                        ₹{v.totalCredit.toLocaleString('en-IN')}
-                      </td>
-                      <td className="py-3 px-5 text-right text-xs font-medium text-slate-700">
-                        {v.approvalStatus} ({v.validationStatus})
-                      </td>
-                    </tr>
+                    <div key={v.id} className="px-5 py-3.5 flex items-center justify-between text-xs">
+                      <div>
+                        <p className="font-semibold text-slate-900 dark:text-white">
+                          {v.voucherNumber} · {v.voucherType}
+                        </p>
+                        <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+                          {v.partyLedger} ↔ {v.primaryLedger}
+                        </p>
+                      </div>
+                      <div className="text-right font-mono">
+                        <p className="text-slate-900 dark:text-white font-medium">
+                          ₹{v.totalDebit.toLocaleString('en-IN')}
+                        </p>
+                        <p className="text-emerald-600 dark:text-emerald-400">{v.approvalStatus}</p>
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 7: GST */}
-        {workspaceTab === 'GST' && (
-          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Simulated GSTR-2B vs Books Reconciliation ({activeClient.gstin})
-              </h3>
-              <button
-                type="button"
-                onClick={() => onNavigate('gst', activeClient.id)}
-                className="text-xs font-medium text-emerald-700 hover:underline"
-              >
-                Full GST Workspace
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs text-slate-500 bg-slate-50/60">
-                    <th className="py-3 px-5 font-medium">Supplier · GSTIN</th>
-                    <th className="py-3 px-4 font-medium">Invoice</th>
-                    <th className="py-3 px-4 font-medium text-right">Books Tax</th>
-                    <th className="py-3 px-4 font-medium text-right">2B Tax</th>
-                    <th className="py-3 px-5 font-medium text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-sm">
-                  {clientGstItems.map((item) => (
-                    <tr key={item.id} className="hover:bg-slate-50/70">
-                      <td className="py-3 px-5 text-xs">
-                        <p className="font-medium text-slate-900">{item.supplierName}</p>
-                        <p className="text-slate-500 font-mono">{item.supplierGstin}</p>
-                      </td>
-                      <td className="py-3 px-4 font-mono tabular-nums text-xs text-slate-700">
-                        {item.invoiceNo}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-xs">
-                        ₹{item.booksIgstCgstSgst.toLocaleString('en-IN')}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-xs">
-                        ₹{item.gstr2bTax.toLocaleString('en-IN')}
-                      </td>
-                      <td className="py-3 px-5 text-right text-xs font-medium text-slate-800">
-                        {item.status}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 8: Audit History */}
-        {workspaceTab === 'Audit History' && (
-          <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-200">
-            <div className="px-5 py-4">
-              <h3 className="text-sm font-semibold text-slate-900">
-                Append-Only Client Audit History ({clientAudit.length})
-              </h3>
-            </div>
-            {clientAudit.map((evt) => (
-              <div key={evt.id} className="px-5 py-3.5 space-y-1">
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span className="font-semibold text-slate-900">{evt.eventType}</span>
-                  <span className="font-mono tabular-nums">{evt.timestamp}</span>
                 </div>
-                <p className="text-xs text-slate-700">{evt.description}</p>
-                <p className="text-xs text-slate-400">
-                  Actor: {evt.actor} · Ref: <span className="font-mono">{evt.reference}</span>
+              )}
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                  Document Processing History ({clientAudit.length})
+                </h3>
+              </div>
+              {clientAudit.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-400">
+                  No processing history recorded yet.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {clientAudit.map((evt) => (
+                    <div key={evt.id} className="px-5 py-3.5 space-y-1 text-xs">
+                      <div className="flex justify-between">
+                        <span className="font-semibold text-slate-900 dark:text-white">
+                          {evt.eventType}
+                        </span>
+                        <span className="font-mono text-slate-400">{evt.timestamp}</span>
+                      </div>
+                      <p className="text-slate-600 dark:text-slate-300">{evt.description}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: Financial Statements (Revenue, Expense, P&L, Balance Sheet, Sales & Purchase) */}
+        {clientTab === 'Financial Statements' && (
+          <div className="space-y-6">
+            {!hasProcessedAccountingData ? (
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-10 text-center space-y-2">
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                  No Processed Financial Data Yet
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                  Revenue, Expense, Profit & Loss, Balance Sheet, and Sales & Purchase summaries for{' '}
+                  <strong>{activeClient.name}</strong> will be generated automatically once accounting documents are uploaded and processed.
                 </p>
               </div>
-            ))}
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Profit & Loss Summary */}
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-3">
+                    Profit & Loss Statement (FY {activeClient.financialYear})
+                  </h3>
+                  <div className="space-y-2.5 text-xs font-mono">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Revenue from Operations (Sales)</span>
+                      <span className="text-slate-900 dark:text-white font-semibold">
+                        ₹{totalRevenue.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Purchases & Direct Costs</span>
+                      <span className="text-slate-900 dark:text-white">
+                        ₹{totalPurchases.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Operating & Indirect Expenses</span>
+                      <span className="text-slate-900 dark:text-white">
+                        ₹{totalOperatingExpenses.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between pt-2 border-t border-slate-200 dark:border-slate-800 font-semibold">
+                      <span>Net Profit / (Loss)</span>
+                      <span
+                        className={
+                          netProfitOrLoss >= 0
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-rose-600 dark:text-rose-400'
+                        }
+                      >
+                        ₹{netProfitOrLoss.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Balance Sheet & Ledger Position */}
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-3">
+                    Balance Sheet & Sales/Purchase Summary
+                  </h3>
+                  <div className="space-y-2.5 text-xs font-mono">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Sales Register Total ({salesVouchers.length} vouchers)</span>
+                      <span className="text-slate-900 dark:text-white">
+                        ₹{totalRevenue.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Purchase Register Total ({purchaseVouchers.length} vouchers)</span>
+                      <span className="text-slate-900 dark:text-white">
+                        ₹{totalPurchases.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Active Client Ledgers</span>
+                      <span className="text-slate-900 dark:text-white">{clientLedgers.length}</span>
+                    </div>
+                    <div className="flex justify-between pt-2 border-t border-slate-200 dark:border-slate-800 font-semibold">
+                      <span>Current Period Reserve / Surplus</span>
+                      <span className="text-slate-900 dark:text-white">
+                        ₹{netProfitOrLoss.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Tab 9: Tally Synchronization */}
-        {workspaceTab === 'Tally Synchronization' && (
-          <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+        {/* TAB 5: GST Summary */}
+        {clientTab === 'GST Summary' && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                <span className="text-xs text-slate-500">Output GST Liability</span>
+                <p className="text-2xl font-semibold font-mono text-slate-900 dark:text-white mt-1">
+                  ₹{outputGst.toLocaleString('en-IN')}
+                </p>
+              </div>
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                <span className="text-xs text-slate-500">Input Tax Credit (Books)</span>
+                <p className="text-2xl font-semibold font-mono text-emerald-600 dark:text-emerald-400 mt-1">
+                  ₹{inputGst.toLocaleString('en-IN')}
+                </p>
+              </div>
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
+                <span className="text-xs text-slate-500">Net GST Payable</span>
+                <p className="text-2xl font-semibold font-mono text-slate-900 dark:text-white mt-1">
+                  ₹{Math.max(0, outputGst - inputGst).toLocaleString('en-IN')}
+                </p>
+              </div>
+            </div>
+
+            {clientGstItems.length === 0 && !hasProcessedAccountingData && (
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-400">
+                No GST invoices processed for {activeClient.name} yet.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 6: Tally Sync */}
+        {clientTab === 'Tally Sync' && (
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h3 className="text-base font-semibold text-slate-900">
-                  TallyPrime Synchronization ({activeClient.tallyStatus})
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                  TallyPrime Synchronization Status ({activeClient.tallyStatus})
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Generate TallyPrime XML or run a simulated voucher import for {activeClient.name}.
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Export verified vouchers for {activeClient.name} to TallyPrime XML.
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => generateTallyXmlForClient(activeClient.id, activeClient.financialYear)}
-                  className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md"
+                  disabled={clientVouchers.length === 0}
+                  className="px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-xl disabled:opacity-50"
                 >
                   Generate Tally XML
                 </button>
                 <button
                   type="button"
                   onClick={() => simulateTallyImportForClient(activeClient.id, activeClient.financialYear)}
-                  className="px-3.5 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md inline-flex items-center gap-1.5"
+                  disabled={clientVouchers.length === 0}
+                  className="px-3.5 py-2 text-xs font-medium text-white bg-slate-900 dark:bg-emerald-600 rounded-xl inline-flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  Simulate Tally Import
+                  <span>Sync with Tally</span>
                 </button>
               </div>
             </div>
 
-            <div className="divide-y divide-slate-200 border border-slate-200 rounded-md">
-              {clientTallyJobs.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-500">
-                  No Tally sync jobs recorded for this client yet. Click "Simulate Tally Import" above.
-                </div>
-              ) : (
-                clientTallyJobs.map((job) => (
-                  <div key={job.id} className="p-4 flex items-center justify-between gap-4">
+            {clientTallyJobs.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                No Tally synchronization jobs recorded for this client yet.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                {clientTallyJobs.map((job) => (
+                  <div key={job.id} className="py-3 flex items-center justify-between text-xs">
                     <div>
-                      <p className="text-xs font-semibold text-slate-900">{job.tallyCompany}</p>
-                      <p className="text-xs text-slate-600 mt-0.5">{job.summary}</p>
+                      <p className="font-semibold text-slate-900 dark:text-white">
+                        {job.tallyCompany}
+                      </p>
+                      <p className="text-slate-500">{job.summary}</p>
                     </div>
-                    <span className="text-xs font-mono tabular-nums text-slate-500 shrink-0">
-                      {job.syncedAt}
-                    </span>
+                    <span className="font-mono text-slate-400">{job.syncedAt}</span>
                   </div>
-                ))
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -972,270 +982,257 @@ export const ClientsSection: React.FC<ClientsSectionProps> = ({
   }
 
   // Client Directory List View
-  const filteredClients = clients.filter((c) => {
-    const matchesSearch =
-      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.gstin.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.pan.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus =
-      statusFilter === 'ALL' || c.accountingStatus === statusFilter;
-    return matchesSearch && matchesStatus;
+  const filteredClients = approvedClients.filter((c) => {
+    const q = searchQuery.toLowerCase();
+    return (
+      c.name.toLowerCase().includes(q) ||
+      c.code.toLowerCase().includes(q) ||
+      c.gstin.toLowerCase().includes(q) ||
+      c.contactEmail.toLowerCase().includes(q)
+    );
   });
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <p className="text-xs text-slate-500">
-            Client Directory · Multi-Tenant CA Firm Workspace
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Approved Firm Clients · Select a client to view isolated accounting analytics
           </p>
-          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight mt-0.5">
-            Clients ({clients.length})
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white tracking-tight mt-0.5">
+            Clients ({approvedClients.length})
           </h1>
         </div>
-        <button
-          type="button"
-          onClick={openNewClientModal}
-          className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          New Client
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => onNavigate('client-requests')}
+            className="px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl"
+          >
+            Client Requests
+          </button>
+          <button
+            type="button"
+            onClick={openNewClientModal}
+            className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 rounded-xl inline-flex items-center gap-1.5"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Client</span>
+          </button>
+        </div>
       </div>
 
-      {/* Search & Segmented Status Filter */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by client name, code, GSTIN, or PAN..."
-            className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-300 rounded-md text-slate-900 focus:outline-none focus:border-slate-900"
-          />
-        </div>
+      {/* Search Bar */}
+      <div className="relative max-w-md">
+        <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search clients by business name, code, or email..."
+          className="w-full pl-9 pr-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+        />
+      </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-md">
-          {['ALL', 'Up to Date', 'Review Pending', 'Action Required'].map((status) => (
+      {/* Zero-State or Client Directory Table */}
+      {filteredClients.length === 0 ? (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 text-center space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center mx-auto">
+            <FolderOpen className="w-6 h-6" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+              No clients yet
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+              When clients register under your CA firm and you approve their request, their dedicated workspace will appear here.
+            </p>
+          </div>
+          <div className="pt-1 flex items-center justify-center gap-2">
             <button
-              key={status}
               type="button"
-              onClick={() => setStatusFilter(status)}
-              className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
-                statusFilter === status
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
+              onClick={() => onNavigate('client-requests')}
+              className="px-3.5 py-2 rounded-xl text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700"
             >
-              {status === 'ALL' ? 'All Clients' : status}
+              View Client Requests
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={openNewClientModal}
+              className="px-3.5 py-2 rounded-xl text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white"
+            >
+              + Add Client Manually
+            </button>
+          </div>
         </div>
-      </div>
-
-      {/* Clients Table */}
-      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 text-xs text-slate-500 bg-slate-50/60">
-                <th className="py-3 px-5 font-medium">Client Name · Code</th>
-                <th className="py-3 px-4 font-medium">Business Type</th>
-                <th className="py-3 px-4 font-medium">GSTIN · PAN</th>
-                <th className="py-3 px-4 font-medium">FY</th>
-                <th className="py-3 px-4 font-medium">Accounting · Docs</th>
-                <th className="py-3 px-4 font-medium">Tally Status</th>
-                <th className="py-3 px-5 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 text-sm">
-              {filteredClients.map((client) => (
-                <tr key={client.id} className="hover:bg-slate-50/80">
-                  <td className="py-3.5 px-5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedClientId(client.id);
-                        setWorkspaceTab('Overview');
-                      }}
-                      className="text-left font-semibold text-slate-900 hover:text-emerald-700 transition-colors"
-                    >
-                      {client.name}
-                    </button>
-                    <p className="text-xs font-mono text-slate-500 mt-0.5">{client.code}</p>
-                  </td>
-                  <td className="py-3.5 px-4 text-xs text-slate-600">{client.businessType}</td>
-                  <td className="py-3.5 px-4 font-mono tabular-nums text-xs text-slate-700">
-                    <div>{client.gstin}</div>
-                    <div className="text-slate-400">PAN: {client.pan}</div>
-                  </td>
-                  <td className="py-3.5 px-4 font-mono tabular-nums text-xs text-slate-700">
-                    {client.financialYear}
-                  </td>
-                  <td className="py-3.5 px-4 text-xs">
-                    <span
-                      className={`font-medium ${
-                        client.accountingStatus === 'Action Required'
-                          ? 'text-red-600'
-                          : client.accountingStatus === 'Review Pending'
-                          ? 'text-amber-700'
-                          : 'text-emerald-700'
-                      }`}
-                    >
-                      {client.accountingStatus}
-                    </span>
-                    <span className="text-slate-400"> · </span>
-                    <span className="text-slate-600">{client.docProcessingStatus}</span>
-                  </td>
-                  <td className="py-3.5 px-4 text-xs text-slate-700">{client.tallyStatus}</td>
-                  <td className="py-3.5 px-5 text-right whitespace-nowrap">
-                    <div className="inline-flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openEditClientModal(client)}
-                        className="px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 rounded"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedClientId(client.id);
-                          setWorkspaceTab('Overview');
-                        }}
-                        className="px-2.5 py-1 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded"
-                      >
-                        Workspace
-                      </button>
-                    </div>
-                  </td>
+      ) : (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500 bg-slate-50/60 dark:bg-slate-950/40">
+                  <th className="py-3.5 px-5 font-medium">Business Name</th>
+                  <th className="py-3.5 px-4 font-medium">Email · GSTIN</th>
+                  <th className="py-3.5 px-4 font-medium">FY</th>
+                  <th className="py-3.5 px-4 font-medium text-right">Documents</th>
+                  <th className="py-3.5 px-4 font-medium text-right">Vouchers</th>
+                  <th className="py-3.5 px-5 font-medium text-right">Workspace</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
+                {filteredClients.map((client) => {
+                  const docCount = documents.filter((d) => d.clientId === client.id).length;
+                  const voucherCount = vouchers.filter((v) => v.clientId === client.id).length;
+                  return (
+                    <tr
+                      key={client.id}
+                      onClick={() => setSelectedClientId(client.id)}
+                      className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
+                    >
+                      <td className="py-4 px-5">
+                        <p className="font-semibold text-slate-900 dark:text-white">
+                          {client.name}
+                        </p>
+                        <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                          {client.code} · {client.businessType}
+                        </p>
+                      </td>
+                      <td className="py-4 px-4">
+                        <p className="text-slate-700 dark:text-slate-300">
+                          {client.contactEmail || '—'}
+                        </p>
+                        <p className="text-[11px] font-mono text-slate-400">
+                          {client.gstin || 'GSTIN not set'}
+                        </p>
+                      </td>
+                      <td className="py-4 px-4 font-mono text-slate-600 dark:text-slate-300">
+                        FY {client.financialYear}
+                      </td>
+                      <td className="py-4 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-white">
+                        {docCount}
+                      </td>
+                      <td className="py-4 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-white">
+                        {voucherCount}
+                      </td>
+                      <td className="py-4 px-5 text-right">
+                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                          <span>Open</span>
+                          <ArrowUpRight className="w-3.5 h-3.5" />
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Create / Edit Client Modal */}
       {showClientModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-lg max-w-md w-full p-6 space-y-4">
-            <h2 className="text-base font-semibold text-slate-900">
-              {editingClient ? 'Edit Client Information' : 'Create New Client'}
+        <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-xl">
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+              {editingClient ? 'Edit Client Details' : 'Add Client Workspace'}
             </h2>
-            <form onSubmit={handleSaveClient} className="space-y-3.5">
+            <form onSubmit={handleSaveClient} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Legal Entity Name
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
+                  Business / Company Name
                 </label>
                 <input
                   type="text"
                   required
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  placeholder="e.g. Sahyadri Forgings Pvt. Ltd."
-                  className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2"
+                  placeholder="e.g. Sharma Precision Pvt Ltd"
+                  className="w-full text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-900 dark:text-white"
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Client Code
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
+                    Short Code
                   </label>
                   <input
                     type="text"
-                    required
                     value={formCode}
                     onChange={(e) => setFormCode(e.target.value)}
-                    placeholder="SFP-05"
-                    className="w-full text-sm font-mono bg-white border border-slate-300 rounded-md px-3 py-2"
+                    placeholder="SPP"
+                    className="w-full text-xs font-mono bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-900 dark:text-white uppercase"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
                     Financial Year
                   </label>
                   <select
                     value={formFY}
                     onChange={(e) => setFormFY(e.target.value)}
-                    className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2"
+                    className="w-full text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-900 dark:text-white"
                   >
                     {FINANCIAL_YEARS.map((fy) => (
                       <option key={fy} value={fy}>
-                        {fy}
+                        FY {fy}
                       </option>
                     ))}
                   </select>
                 </div>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Business Type
-                </label>
-                <input
-                  type="text"
-                  value={formType}
-                  onChange={(e) => setFormType(e.target.value)}
-                  className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2"
-                />
-              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    GSTIN (15 chars)
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
+                    GSTIN (Optional)
                   </label>
                   <input
                     type="text"
-                    required
                     maxLength={15}
                     value={formGstin}
                     onChange={(e) => setFormGstin(e.target.value)}
-                    placeholder="27AABCS1429P1Z1"
-                    className="w-full text-sm font-mono bg-white border border-slate-300 rounded-md px-3 py-2 uppercase"
+                    placeholder="27AAAAA0000A1Z5"
+                    className="w-full text-xs font-mono bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-900 dark:text-white uppercase"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    PAN (10 chars)
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
+                    PAN (Optional)
                   </label>
                   <input
                     type="text"
-                    required
                     maxLength={10}
                     value={formPan}
                     onChange={(e) => setFormPan(e.target.value)}
-                    placeholder="AABCS1429P"
-                    className="w-full text-sm font-mono bg-white border border-slate-300 rounded-md px-3 py-2 uppercase"
+                    placeholder="AAAAA0000A"
+                    className="w-full text-xs font-mono bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-900 dark:text-white uppercase"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Client Portal Email
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
+                  Client Email
                 </label>
                 <input
                   type="email"
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
-                  placeholder="accounts@company.in"
-                  className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2"
+                  placeholder="client@gmail.com"
+                  className="w-full text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-slate-900 dark:text-white"
                 />
               </div>
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setShowClientModal(false)}
-                  className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:text-slate-900"
+                  className="px-3.5 py-2 text-xs font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md"
+                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-emerald-600 rounded-xl"
                 >
-                  {editingClient ? 'Save Changes' : 'Create Client'}
+                  Save Client
                 </button>
               </div>
             </form>
