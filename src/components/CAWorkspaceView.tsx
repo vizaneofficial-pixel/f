@@ -11,13 +11,15 @@ import {
   RefreshCw,
   History,
   Settings,
-  ArrowRightLeft,
   Menu,
   X,
-  LogIn,
   LogOut,
+  Sun,
+  Moon,
+  ShieldCheck,
 } from 'lucide-react';
 import { useFenora } from '../context/FenoraContext';
+import { useTheme } from '../context/ThemeContext';
 import { FenoraLogo } from './FenoraLogo';
 import { NavigationTab } from '../types/accounting';
 import { OverviewSection, ClientsSection } from './ca/OverviewAndClientsSection';
@@ -35,7 +37,7 @@ import {
 } from './ca/GstTallyAuditSettingsSection';
 
 interface CAWorkspaceViewProps {
-  onOpenRoleModal: () => void;
+  onOpenRoleModal?: () => void;
 }
 
 interface NavItemConfig {
@@ -58,8 +60,9 @@ const NAV_ITEMS: NavItemConfig[] = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
-export const CAWorkspaceView: React.FC<CAWorkspaceViewProps> = ({ onOpenRoleModal }) => {
-  const { firm, firebaseUser, signInWithGoogle, signOutUser } = useFenora();
+export const CAWorkspaceView: React.FC<CAWorkspaceViewProps> = () => {
+  const { theme, toggleTheme } = useTheme();
+  const { firm, signOutUser } = useFenora();
 
   const [activeNav, setActiveNav] = useState<NavigationTab>('overview');
   const [scopedClientId, setScopedClientId] = useState<string | null>(null);
@@ -75,12 +78,14 @@ export const CAWorkspaceView: React.FC<CAWorkspaceViewProps> = ({ onOpenRoleModa
     NAV_ITEMS.find((n) => n.id === activeNav)?.label || 'Overview';
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex">
-      {/* Desktop Sidebar (Dark Navy Fintech Aesthetic) */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-60 bg-slate-900 text-slate-300 shrink-0 border-r border-slate-800">
-        <div className="h-14 px-5 flex items-center justify-between border-b border-slate-800">
-          <FenoraLogo dark />
-          <span className="text-[11px] font-mono text-emerald-400">CA FIRM</span>
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex transition-colors duration-200">
+      {/* Desktop Sidebar — Proper Light Mode & Dark Mode */}
+      <aside className="hidden lg:flex lg:flex-col lg:w-60 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 shrink-0 border-r border-slate-200 dark:border-slate-800 transition-colors">
+        <div className="h-14 px-5 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
+          <FenoraLogo dark={theme === 'dark'} />
+          <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200/60 dark:border-emerald-800/60">
+            CA FIRM
+          </span>
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
@@ -92,15 +97,15 @@ export const CAWorkspaceView: React.FC<CAWorkspaceViewProps> = ({ onOpenRoleModa
                 key={item.id}
                 type="button"
                 onClick={() => handleNavigate(item.id)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-xl transition-colors whitespace-nowrap ${
                   isActive
-                    ? 'bg-emerald-600/15 text-white font-semibold'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/70'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/70'
                 }`}
               >
                 <Icon
                   className={`w-4 h-4 shrink-0 ${
-                    isActive ? 'text-emerald-400' : 'text-slate-400'
+                    isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'
                   }`}
                 />
                 <span>{item.label}</span>
@@ -109,45 +114,34 @@ export const CAWorkspaceView: React.FC<CAWorkspaceViewProps> = ({ onOpenRoleModa
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-800 space-y-2.5">
+        <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
           <div className="text-xs">
-            <p className="font-medium text-white truncate">{firm.name}</p>
-            <p className="text-slate-400 font-mono text-[11px] mt-0.5">
+            <p className="font-medium text-slate-900 dark:text-white truncate">{firm.name}</p>
+            <p className="text-slate-500 dark:text-slate-400 font-mono text-[11px] mt-0.5">
               {firm.registrationNo} · FY {firm.defaultFinancialYear}
             </p>
           </div>
-          {!firebaseUser ? (
-            <button
-              type="button"
-              onClick={() => signInWithGoogle('ca')}
-              className="w-full py-1.5 px-3 text-xs font-medium text-emerald-300 bg-emerald-950/70 hover:bg-emerald-900/70 border border-emerald-800/60 rounded-md inline-flex items-center justify-center gap-1.5 transition-colors"
-            >
-              <LogIn className="w-3.5 h-3.5" />
-              Sign in with Google
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={signOutUser}
-              className="w-full py-1.5 px-3 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 rounded-md inline-flex items-center justify-center gap-1.5"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              Sign Out
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={signOutUser}
+            className="w-full py-1.5 px-3 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-xl inline-flex items-center justify-center gap-1.5 transition-colors"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Sign Out
+          </button>
         </div>
       </aside>
 
       {/* Mobile Sidebar Overlay */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
-          <div className="w-64 bg-slate-900 text-slate-200 flex flex-col h-full p-4">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-              <FenoraLogo dark />
+          <div className="w-64 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 flex flex-col h-full p-4 border-r border-slate-200 dark:border-slate-800">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800">
+              <FenoraLogo dark={theme === 'dark'} />
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(false)}
-                className="p-1 text-slate-400 hover:text-white"
+                className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -161,10 +155,10 @@ export const CAWorkspaceView: React.FC<CAWorkspaceViewProps> = ({ onOpenRoleModa
                     key={item.id}
                     type="button"
                     onClick={() => handleNavigate(item.id)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-md ${
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-xl ${
                       isActive
-                        ? 'bg-emerald-600/20 text-white'
-                        : 'text-slate-400 hover:text-white'
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
                     }`}
                   >
                     <Icon className="w-4 h-4" />
@@ -175,7 +169,7 @@ export const CAWorkspaceView: React.FC<CAWorkspaceViewProps> = ({ onOpenRoleModa
             </nav>
           </div>
           <div
-            className="flex-1 bg-slate-900/50"
+            className="flex-1 bg-slate-900/40 backdrop-blur-xs"
             onClick={() => setMobileMenuOpen(false)}
           />
         </div>
@@ -183,62 +177,68 @@ export const CAWorkspaceView: React.FC<CAWorkspaceViewProps> = ({ onOpenRoleModa
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Strict SaaS Top Bar Contract: Breadcrumb on Left, Quick Nav in Center, 1 Primary Switch Action on Right */}
-        <header className="h-14 bg-white border-b border-slate-200 px-6 flex items-center justify-between gap-8 shrink-0">
+        {/* Top Header */}
+        <header className="h-14 glass-panel border-b border-slate-200/80 dark:border-slate-800/80 px-6 flex items-center justify-between gap-6 shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-1.5 text-slate-600 hover:text-slate-900"
+              className="lg:hidden p-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
             >
               <Menu className="w-4 h-4" />
             </button>
-            <div className="text-xs text-slate-500 truncate whitespace-nowrap">
-              <span className="font-medium text-slate-900">Fenora CA</span>
-              <span className="mx-2 text-slate-300">/</span>
-              <span className="text-slate-700 font-medium">{currentNavLabel}</span>
+            <div className="text-xs text-slate-500 dark:text-slate-400 truncate whitespace-nowrap">
+              <span className="font-semibold text-slate-900 dark:text-white">Fenora CA</span>
+              <span className="mx-2 text-slate-300 dark:text-slate-700">/</span>
+              <span className="text-slate-700 dark:text-slate-300 font-medium">{currentNavLabel}</span>
             </div>
           </div>
 
-          <nav className="hidden md:flex items-center gap-6 text-xs font-medium text-slate-600">
+          <nav className="hidden md:flex items-center gap-6 text-xs font-medium text-slate-600 dark:text-slate-400">
             <button
               type="button"
               onClick={() => handleNavigate('clients')}
-              className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
+              className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0"
             >
               Clients
             </button>
             <button
               type="button"
               onClick={() => handleNavigate('documents')}
-              className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
+              className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0"
             >
               Documents
             </button>
             <button
               type="button"
               onClick={() => handleNavigate('voucher-review')}
-              className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
+              className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0"
             >
               Voucher Review
             </button>
             <button
               type="button"
               onClick={() => handleNavigate('tally')}
-              className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
+              className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0"
             >
               Tally XML
             </button>
           </nav>
 
           <div className="flex items-center gap-3 shrink-0">
+            <div className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-mono bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+              <span>CA Workspace</span>
+            </div>
+
+            {/* Theme Toggle */}
             <button
               type="button"
-              onClick={onOpenRoleModal}
-              className="px-3.5 py-1.5 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              onClick={toggleTheme}
+              aria-label="Toggle theme"
+              className="p-2 rounded-full hover:bg-slate-200/60 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors"
             >
-              <ArrowRightLeft className="w-3.5 h-3.5" />
-              Client Portal View
+              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
           </div>
         </header>

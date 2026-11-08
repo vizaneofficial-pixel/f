@@ -8,6 +8,7 @@
         "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "email": { "type": "string", "format": "email", "maxLength": 120 },
         "displayName": { "type": "string", "maxLength": 100 },
+        "businessName": { "type": "string", "maxLength": 120 },
         "role": { "type": "string", "enum": ["ca", "client"], "maxLength": 20 },
         "firmId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "clientId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },

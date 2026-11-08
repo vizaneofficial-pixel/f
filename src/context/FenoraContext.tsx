@@ -2,6 +2,9 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import {
   onAuthStateChanged,
   signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut as firebaseSignOut,
   User as FirebaseUser,
 } from 'firebase/auth';
@@ -64,9 +67,14 @@ interface FenoraContextValue {
   auditEvents: AuditEvent[];
   clientRequests: ClientRequest[];
   gstReconciliation: GSTReconciliationItem[];
-  signInWithGoogle: (preferredRole?: UserRole, preferredClientId?: string) => Promise<void>;
-  enterWorkspaceAsRole: (role: UserRole, clientId?: string) => Promise<void>;
+  // Authentication methods
+  signInWithEmail: (email: string, pass: string) => Promise<{ ok: boolean; error?: string }>;
+  signUpWithEmail: (email: string, pass: string, name?: string, role?: UserRole, businessName?: string) => Promise<{ ok: boolean; error?: string }>;
+  sendPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
+  signInWithGoogle: (preferredRole?: UserRole, preferredClientId?: string) => Promise<{ ok: boolean; error?: string }>;
   signOutUser: () => Promise<void>;
+  enterWorkspaceAsRole: (role: UserRole, clientId?: string) => Promise<void>;
+  // Accounting actions
   createClient: (input: {
     name: string;
     code: string;
@@ -142,19 +150,10 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const defaultSeed = buildInitialSeedData('demo_ca_user');
 
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>({
-    uid: 'demo_ca_user',
-    email: 'vikram@deshmukhca.in',
-    displayName: 'CA Vikram Deshmukh',
-    role: 'ca',
-    firmId: defaultSeed.firm.id,
-    clientId: 'client_aravind_tex',
-    createdAt: '2026-04-01T09:00:00Z',
-    updatedAt: '2026-11-07T09:00:00Z',
-  });
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [authReady, setAuthReady] = useState<boolean>(false);
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
-  const [activeRole, setActiveRole] = useState<UserRole>('ca');
+  const [activeRole, setActiveRole] = useState<UserRole>('client');
   const [activePortalClientId, setActivePortalClientId] = useState<string>('client_aravind_tex');
 
   const [firm, setFirm] = useState<Firm>(defaultSeed.firm);
@@ -180,201 +179,231 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [gstReconciliation] = useState<GSTReconciliationItem[]>(SIMULATED_GST_RECONCILIATION);
 
   // Seed Firestore tenant workspace if empty for authenticated user
-  const ensureFirestoreSeeded = useCallback(async (user: FirebaseUser, preferredRole?: UserRole, preferredClientId?: string) => {
-    const uid = sanitizeId(user.uid);
-    const seed = buildInitialSeedData(uid);
-    const nowIso = new Date().toISOString().slice(0, 35);
+  const ensureFirestoreSeeded = useCallback(
+    async (
+      user: FirebaseUser,
+      preferredRole?: UserRole,
+      preferredClientId?: string,
+      displayName?: string,
+      businessName?: string
+    ) => {
+      const uid = sanitizeId(user.uid);
+      const seed = buildInitialSeedData(uid);
+      const nowIso = new Date().toISOString().slice(0, 35);
 
-    // 1. Check user profile
-    const userRef = doc(db, 'users', uid);
-    try {
-      const userSnap = await getDoc(userRef);
-      if (!userSnap.exists()) {
-        const newProfile: UserProfile = {
-          uid,
-          email: (user.email || 'user@fenora.in').slice(0, 120),
-          displayName: (user.displayName || 'CA Vikram Deshmukh').slice(0, 100),
-          role: preferredRole || 'ca',
-          firmId: seed.firm.id,
-          clientId: preferredClientId || 'client_aravind_tex',
-          createdAt: nowIso,
-          updatedAt: nowIso,
-        };
-        await setDoc(userRef, newProfile);
-        setUserProfile(newProfile);
-        setActiveRole(newProfile.role);
-        setActivePortalClientId(newProfile.clientId);
-      } else {
-        const existingProfile = userSnap.data() as UserProfile;
-        if (preferredRole && (existingProfile.role !== preferredRole || (preferredClientId && existingProfile.clientId !== preferredClientId))) {
-          const updatedRole = preferredRole;
-          const updatedClientId = preferredClientId || existingProfile.clientId;
-          await updateDoc(userRef, {
-            role: updatedRole,
-            clientId: updatedClientId,
+      let currentRole: UserRole = preferredRole || 'client';
+
+      // Check user profile
+      const userRef = doc(db, 'users', uid);
+      try {
+        const userSnap = await getDoc(userRef);
+        if (!userSnap.exists()) {
+          const userEmailLower = (user.email || '').toLowerCase();
+          const isCAEmail =
+            userEmailLower.includes('fenoraca.in') ||
+            userEmailLower.startsWith('ca@') ||
+            userEmailLower.startsWith('vikram@') ||
+            preferredRole === 'ca';
+          const determinedRole: UserRole = isCAEmail ? 'ca' : 'client';
+          currentRole = determinedRole;
+
+          let targetClientId = preferredClientId;
+          if (!targetClientId) {
+            if (determinedRole === 'ca') {
+              targetClientId = 'client_aravind_tex';
+            } else {
+              const isKnownClient =
+                userEmailLower.includes('aravind') ||
+                userEmailLower === 'relaxingsoundsformeditation@gmail.com' ||
+                userEmailLower.includes('demo') ||
+                userEmailLower.includes('client');
+              targetClientId = isKnownClient ? 'client_aravind_tex' : 'pending';
+            }
+          }
+
+          const fallbackName =
+            determinedRole === 'ca'
+              ? 'CA Vikram Deshmukh'
+              : (user.displayName || (user.email ? user.email.split('@')[0] : 'Client Workspace'));
+
+          const newProfile: UserProfile = {
+            uid,
+            email: (user.email || 'user@fenora.in').slice(0, 120),
+            displayName: (displayName || user.displayName || fallbackName).slice(0, 100),
+            ...(businessName?.trim() ? { businessName: businessName.trim().slice(0, 120) } : {}),
+            role: determinedRole,
+            firmId: seed.firm.id,
+            clientId: targetClientId,
+            createdAt: nowIso,
             updatedAt: nowIso,
-          });
-          setUserProfile({ ...existingProfile, role: updatedRole, clientId: updatedClientId, updatedAt: nowIso });
-          setActiveRole(updatedRole);
-          setActivePortalClientId(updatedClientId);
+          };
+          await setDoc(userRef, newProfile);
+          setUserProfile(newProfile);
+          setActiveRole(newProfile.role);
+          setActivePortalClientId(newProfile.clientId);
         } else {
+          const existingProfile = userSnap.data() as UserProfile;
+          currentRole = existingProfile.role;
           setUserProfile(existingProfile);
           setActiveRole(existingProfile.role);
           setActivePortalClientId(existingProfile.clientId);
         }
+      } catch (error) {
+        console.warn(`Profile load note for ${uid}:`, error);
       }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, `users/${uid}`);
-    }
 
-    // 2. Check if firm data is already seeded for this ownerUid
-    try {
-      const firmsSnap = await getDocs(query(collection(db, 'firms'), where('ownerUid', '==', uid)));
-      if (firmsSnap.empty) {
-        const batch = writeBatch(db);
-        const idSuffix = `_${uid.slice(0, 8)}`;
+      // Only CA firm partners seed firm tenant workspace records into Firestore.
+      // Client portal accounts operate safely within their client workspace without firm batch mutations.
+      if (currentRole === 'ca') {
+        try {
+          const firmsSnap = await getDocs(query(collection(db, 'firms'), where('ownerUid', '==', uid)));
+          if (firmsSnap.empty) {
+            const batch = writeBatch(db);
+          const idSuffix = `_${uid.slice(0, 8)}`;
+          const mapId = (id: string) => sanitizeId(`${id}${idSuffix}`);
 
-        const mapId = (id: string) => sanitizeId(`${id}${idSuffix}`);
+          const seededFirm: Firm = { ...seed.firm, id: mapId(seed.firm.id) };
+          batch.set(doc(db, 'firms', seededFirm.id), seededFirm);
 
-        const seededFirm: Firm = { ...seed.firm, id: mapId(seed.firm.id) };
-        batch.set(doc(db, 'firms', seededFirm.id), seededFirm);
+          seed.clients.forEach((c) => {
+            const item: Client = { ...c, id: mapId(c.id), firmId: seededFirm.id };
+            batch.set(doc(db, 'clients', item.id), item);
+          });
 
-        seed.clients.forEach((c) => {
-          const item: Client = { ...c, id: mapId(c.id), firmId: seededFirm.id };
-          batch.set(doc(db, 'clients', item.id), item);
-        });
+          seed.financialYears.forEach((fy) => {
+            const item: FinancialYear = {
+              ...fy,
+              id: mapId(fy.id),
+              firmId: seededFirm.id,
+              clientId: mapId(fy.clientId),
+            };
+            batch.set(doc(db, 'financialYears', item.id), item);
+          });
 
-        seed.financialYears.forEach((fy) => {
-          const item: FinancialYear = {
-            ...fy,
-            id: mapId(fy.id),
-            firmId: seededFirm.id,
-            clientId: mapId(fy.clientId),
-          };
-          batch.set(doc(db, 'financialYears', item.id), item);
-        });
+          seed.documents.forEach((d) => {
+            const item: AccountingDocument = {
+              ...d,
+              id: mapId(d.id),
+              firmId: seededFirm.id,
+              clientId: mapId(d.clientId),
+            };
+            batch.set(doc(db, 'documents', item.id), item);
+          });
 
-        seed.documents.forEach((d) => {
-          const item: AccountingDocument = {
-            ...d,
-            id: mapId(d.id),
-            firmId: seededFirm.id,
-            clientId: mapId(d.clientId),
-          };
-          batch.set(doc(db, 'documents', item.id), item);
-        });
+          seed.accountingProfiles.forEach((ap) => {
+            const item: AccountingProfile = {
+              ...ap,
+              id: mapId(ap.id),
+              firmId: seededFirm.id,
+              clientId: mapId(ap.clientId),
+            };
+            batch.set(doc(db, 'accountingProfiles', item.id), item);
+          });
 
-        seed.accountingProfiles.forEach((ap) => {
-          const item: AccountingProfile = {
-            ...ap,
-            id: mapId(ap.id),
-            firmId: seededFirm.id,
-            clientId: mapId(ap.clientId),
-          };
-          batch.set(doc(db, 'accountingProfiles', item.id), item);
-        });
+          seed.ledgerAccounts.forEach((la) => {
+            const item: LedgerAccount = {
+              ...la,
+              id: mapId(la.id),
+              firmId: seededFirm.id,
+              clientId: mapId(la.clientId),
+            };
+            batch.set(doc(db, 'ledgerAccounts', item.id), item);
+          });
 
-        seed.ledgerAccounts.forEach((la) => {
-          const item: LedgerAccount = {
-            ...la,
-            id: mapId(la.id),
-            firmId: seededFirm.id,
-            clientId: mapId(la.clientId),
-          };
-          batch.set(doc(db, 'ledgerAccounts', item.id), item);
-        });
+          seed.vouchers.forEach((v) => {
+            const item: Voucher = {
+              ...v,
+              id: mapId(v.id),
+              firmId: seededFirm.id,
+              clientId: mapId(v.clientId),
+              sourceDocumentId: mapId(v.sourceDocumentId),
+            };
+            batch.set(doc(db, 'vouchers', item.id), item);
+          });
 
-        seed.vouchers.forEach((v) => {
-          const item: Voucher = {
-            ...v,
-            id: mapId(v.id),
-            firmId: seededFirm.id,
-            clientId: mapId(v.clientId),
-            sourceDocumentId: mapId(v.sourceDocumentId),
-          };
-          batch.set(doc(db, 'vouchers', item.id), item);
-        });
+          seed.voucherEntries.forEach((ve) => {
+            const item: VoucherEntry = {
+              ...ve,
+              id: mapId(ve.id),
+              firmId: seededFirm.id,
+              clientId: mapId(ve.clientId),
+              voucherId: mapId(ve.voucherId),
+            };
+            batch.set(doc(db, 'voucherEntries', item.id), item);
+          });
 
-        seed.voucherEntries.forEach((ve) => {
-          const item: VoucherEntry = {
-            ...ve,
-            id: mapId(ve.id),
-            firmId: seededFirm.id,
-            clientId: mapId(ve.clientId),
-            voucherId: mapId(ve.voucherId),
-          };
-          batch.set(doc(db, 'voucherEntries', item.id), item);
-        });
+          seed.aiProcessingJobs.forEach((job) => {
+            const item: AIProcessingJob = {
+              ...job,
+              id: mapId(job.id),
+              firmId: seededFirm.id,
+              clientId: mapId(job.clientId),
+              documentId: mapId(job.documentId),
+            };
+            batch.set(doc(db, 'aiProcessingJobs', item.id), item);
+          });
 
-        seed.aiProcessingJobs.forEach((job) => {
-          const item: AIProcessingJob = {
-            ...job,
-            id: mapId(job.id),
-            firmId: seededFirm.id,
-            clientId: mapId(job.clientId),
-            documentId: mapId(job.documentId),
-          };
-          batch.set(doc(db, 'aiProcessingJobs', item.id), item);
-        });
+          seed.validationResults.forEach((vr) => {
+            const item: ValidationResult = {
+              ...vr,
+              id: mapId(vr.id),
+              firmId: seededFirm.id,
+              clientId: mapId(vr.clientId),
+              voucherId: mapId(vr.voucherId),
+            };
+            batch.set(doc(db, 'validationResults', item.id), item);
+          });
 
-        seed.validationResults.forEach((vr) => {
-          const item: ValidationResult = {
-            ...vr,
-            id: mapId(vr.id),
-            firmId: seededFirm.id,
-            clientId: mapId(vr.clientId),
-            voucherId: mapId(vr.voucherId),
-          };
-          batch.set(doc(db, 'validationResults', item.id), item);
-        });
+          seed.caApprovals.forEach((ca) => {
+            const item: CAApproval = {
+              ...ca,
+              id: mapId(ca.id),
+              firmId: seededFirm.id,
+              clientId: mapId(ca.clientId),
+              voucherId: mapId(ca.voucherId),
+            };
+            batch.set(doc(db, 'caApprovals', item.id), item);
+          });
 
-        seed.caApprovals.forEach((ca) => {
-          const item: CAApproval = {
-            ...ca,
-            id: mapId(ca.id),
-            firmId: seededFirm.id,
-            clientId: mapId(ca.clientId),
-            voucherId: mapId(ca.voucherId),
-          };
-          batch.set(doc(db, 'caApprovals', item.id), item);
-        });
+          seed.tallySyncJobs.forEach((ts) => {
+            const item: TallySyncJob = {
+              ...ts,
+              id: mapId(ts.id),
+              firmId: seededFirm.id,
+              clientId: mapId(ts.clientId),
+            };
+            batch.set(doc(db, 'tallySyncJobs', item.id), item);
+          });
 
-        seed.tallySyncJobs.forEach((ts) => {
-          const item: TallySyncJob = {
-            ...ts,
-            id: mapId(ts.id),
-            firmId: seededFirm.id,
-            clientId: mapId(ts.clientId),
-          };
-          batch.set(doc(db, 'tallySyncJobs', item.id), item);
-        });
+          seed.auditEvents.forEach((ae) => {
+            const item: AuditEvent = {
+              ...ae,
+              id: mapId(ae.id),
+              firmId: seededFirm.id,
+              clientId: mapId(ae.clientId),
+            };
+            batch.set(doc(db, 'auditEvents', item.id), item);
+          });
 
-        seed.auditEvents.forEach((ae) => {
-          const item: AuditEvent = {
-            ...ae,
-            id: mapId(ae.id),
-            firmId: seededFirm.id,
-            clientId: mapId(ae.clientId),
-          };
-          batch.set(doc(db, 'auditEvents', item.id), item);
-        });
+          seed.clientRequests.forEach((cr) => {
+            const item: ClientRequest = {
+              ...cr,
+              id: mapId(cr.id),
+              firmId: seededFirm.id,
+              clientId: mapId(cr.clientId),
+            };
+            batch.set(doc(db, 'clientRequests', item.id), item);
+          });
 
-        seed.clientRequests.forEach((cr) => {
-          const item: ClientRequest = {
-            ...cr,
-            id: mapId(cr.id),
-            firmId: seededFirm.id,
-            clientId: mapId(cr.clientId),
-          };
-          batch.set(doc(db, 'clientRequests', item.id), item);
-        });
-
-        await batch.commit();
+            await batch.commit();
+          }
+        } catch (error) {
+          console.warn('Initial CA firm workspace seed note:', error);
+        }
       }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'firms/seedBatch');
-    }
-  }, []);
+    },
+    []
+  );
 
   // Auth state listener
   useEffect(() => {
@@ -382,6 +411,8 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setFirebaseUser(user);
       if (user) {
         await ensureFirestoreSeeded(user);
+      } else {
+        setUserProfile(null);
       }
       setAuthReady(true);
     });
@@ -576,13 +607,110 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [firebaseUser, firm.id]
   );
 
-  const signInWithGoogle = async (preferredRole?: UserRole, preferredClientId?: string) => {
+  // Format Firebase Auth errors into clear, human-friendly messages
+  const formatAuthError = (err: unknown): string => {
+    if (typeof err === 'object' && err !== null && 'code' in err) {
+      const code = String((err as { code: string }).code);
+      switch (code) {
+        case 'auth/invalid-credential':
+        case 'auth/wrong-password':
+        case 'auth/user-not-found':
+          return 'Incorrect email or password.';
+        case 'auth/email-already-in-use':
+          return 'An account with this email already exists. Please sign in.';
+        case 'auth/invalid-email':
+          return 'Please enter a valid email address.';
+        case 'auth/weak-password':
+          return 'Password must be at least 6 characters.';
+        case 'auth/popup-closed-by-user':
+        case 'auth/cancelled-popup-request':
+          return ''; // Intentionally cancelled
+        case 'auth/popup-blocked':
+          return 'Pop-up blocked. Please allow pop-ups for this site.';
+        case 'auth/account-exists-with-different-credential':
+          return 'An account already exists with a different sign-in method.';
+        case 'auth/unauthorized-domain':
+          return 'Domain is not in Firebase authorized domains list.';
+        case 'auth/operation-not-allowed':
+          return 'Email/password sign-in is not enabled in Firebase Console. Please continue with Google.';
+        case 'auth/too-many-requests':
+          return 'Too many failed attempts. Please try again in a few moments.';
+        case 'auth/network-request-failed':
+          return 'Network error. Please check your internet connection.';
+        default:
+          break;
+      }
+    }
+    const msg = err instanceof Error ? err.message : 'Authentication failed';
+    return msg.replace(/^Firebase:\s*/, '').replace(/\s*\([a-z0-9/-]+\)\.?$/, '');
+  };
+
+  // Email and Password Sign In
+  const signInWithEmail = async (email: string, pass: string): Promise<{ ok: boolean; error?: string }> => {
+    setIsSigningIn(true);
+    try {
+      const res = await signInWithEmailAndPassword(auth, email.trim(), pass);
+      if (res.user) {
+        await ensureFirestoreSeeded(res.user);
+      }
+      return { ok: true };
+    } catch (err: unknown) {
+      return { ok: false, error: formatAuthError(err) };
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  // Email and Password Sign Up
+  const signUpWithEmail = async (
+    email: string,
+    pass: string,
+    name?: string,
+    role: UserRole = 'client',
+    businessName?: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    setIsSigningIn(true);
+    try {
+      const res = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+      if (res.user) {
+        await ensureFirestoreSeeded(res.user, role, undefined, name?.trim(), businessName?.trim());
+      }
+      return { ok: true };
+    } catch (err: unknown) {
+      return { ok: false, error: formatAuthError(err) };
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  // Password Reset
+  const sendPasswordReset = async (email: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      return { ok: true };
+    } catch (err: unknown) {
+      return { ok: false, error: formatAuthError(err) };
+    }
+  };
+
+  // Google Sign-In with Popup
+  const signInWithGoogle = async (
+    preferredRole?: UserRole,
+    preferredClientId?: string
+  ): Promise<{ ok: boolean; error?: string }> => {
     setIsSigningIn(true);
     try {
       const result = await signInWithPopup(auth, googleProvider);
       if (result.user) {
         await ensureFirestoreSeeded(result.user, preferredRole, preferredClientId);
       }
+      return { ok: true };
+    } catch (err: unknown) {
+      const formatted = formatAuthError(err);
+      if (!formatted) {
+        return { ok: false }; // User closed popup without error
+      }
+      return { ok: false, error: formatted };
     } finally {
       setIsSigningIn(false);
     }
@@ -608,7 +736,7 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (error) {
         handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
       }
-    } else {
+    } else if (userProfile) {
       setUserProfile((prev) =>
         prev
           ? {
@@ -629,21 +757,8 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (firebaseUser) {
       await firebaseSignOut(auth);
     }
-    const fresh = buildInitialSeedData('demo_ca_user');
-    setFirm(fresh.firm);
-    setClients(fresh.clients);
-    setFinancialYears(fresh.financialYears);
-    setDocuments(fresh.documents);
-    setAccountingProfiles(fresh.accountingProfiles);
-    setLedgerAccounts(fresh.ledgerAccounts);
-    setVouchers(fresh.vouchers);
-    setVoucherEntries(fresh.voucherEntries);
-    setAiProcessingJobs(fresh.aiProcessingJobs);
-    setValidationResults(fresh.validationResults);
-    setCaApprovals(fresh.caApprovals);
-    setTallySyncJobs(fresh.tallySyncJobs);
-    setAuditEvents(fresh.auditEvents);
-    setClientRequests(fresh.clientRequests);
+    setFirebaseUser(null);
+    setUserProfile(null);
   };
 
   const createClient = async (input: {
@@ -770,12 +885,12 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       extractionStatus: 'Pending',
       accountingStatus: 'Unprocessed',
       confidence: 0,
-      vendorOrParty: (input.vendorOrParty || 'Shree Ganesh Industrial Suppliers').slice(0, 120),
+      vendorOrParty: (input.vendorOrParty || 'Vendor Partner').slice(0, 120),
       invoiceNumber: `INV/${input.financialYear.slice(0, 4)}/${Math.floor(1000 + Math.random() * 9000)}`,
       invoiceDate: new Date().toISOString().slice(0, 10),
       totalAmount: baseAmount,
       taxAmount: taxAmt,
-      gstin: '27AABCS8812G1Z3',
+      gstin: targetClient.gstin || '27AABCS8812G1Z3',
       uploadedByRole: activeRole,
       updatedAt: nowIso,
     };
@@ -813,7 +928,7 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       financialYear: newDoc.financialYear,
       reference: newDoc.fileName,
       eventType: 'Document Uploaded',
-      actor: activeRole === 'client' ? `Client Portal (${targetClient.contactEmail})` : 'CA Firm Staff',
+      actor: activeRole === 'client' ? `Client (${targetClient.name})` : 'CA Firm Staff',
       description: `Uploaded ${newDoc.category} (${newDoc.fileName}) for ${newDoc.period}.`,
     });
 
@@ -831,7 +946,6 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const taxAmt = targetDoc.taxAmount || Math.round((totalAmt * 18) / 118);
     const taxableAmt = totalAmt - taxAmt;
 
-    // 1. Update Document status
     const docUpdates = {
       processingStatus: 'Completed' as const,
       extractionStatus: 'Extracted' as const,
@@ -852,13 +966,12 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     }
 
-    // 2. Update AI Processing Job
     const existingJob = aiProcessingJobs.find((j) => j.documentId === docId);
     if (existingJob) {
       const jobUpdates = {
         stage: 'Completed' as const,
         confidence,
-        validationSummary: `Extracted GSTIN ${targetDoc.gstin}, Taxable ₹${taxableAmt.toLocaleString('en-IN')}, GST ₹${taxAmt.toLocaleString('en-IN')}. Draft voucher balanced.`,
+        validationSummary: `Extracted GSTIN ${targetDoc.gstin}, Taxable ₹${taxableAmt.toLocaleString('en-IN')}, GST ₹${taxAmt.toLocaleString('en-IN')}.`,
         updatedAt: nowIso,
       };
       setAiProcessingJobs((prev) =>
@@ -873,7 +986,6 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     }
 
-    // 3. Create balanced Draft Voucher + Entries if not already created for this doc
     const existingVoucher = vouchers.find((v) => v.sourceDocumentId === docId);
     if (!existingVoucher) {
       const isSales = targetDoc.category === 'Sales Invoice';
@@ -905,7 +1017,7 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         totalDebit: totalAmt,
         totalCredit: totalAmt,
         narration: `Being ${targetDoc.category} booked vide ${targetDoc.invoiceNumber} dated ${targetDoc.invoiceDate} from ${targetDoc.vendorOrParty}.`,
-        aiExplanation: `Simulated AI extraction matched ${targetDoc.vendorOrParty} (${targetDoc.gstin}) and verified 18% GST computation. Total Dr ₹${totalAmt.toLocaleString('en-IN')} = Total Cr ₹${totalAmt.toLocaleString('en-IN')}.`,
+        aiExplanation: `Simulated AI extraction matched ${targetDoc.vendorOrParty} (${targetDoc.gstin}) and verified 18% GST computation.`,
         aiConfidence: confidence,
         validationStatus: 'Valid',
         approvalStatus: 'Pending Review',
@@ -1026,7 +1138,7 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       reference: newLedger.name,
       eventType: 'Ledger Master Created',
       actor: userProfile?.displayName || 'CA Vikram Deshmukh',
-      description: `Added ledger "${newLedger.name}" under group ${newLedger.group} with AI keywords [${newLedger.aiSuggestedKeywords}].`,
+      description: `Added ledger "${newLedger.name}" under group ${newLedger.group}.`,
     });
   };
 
@@ -1084,7 +1196,6 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const isBalanced = Math.abs(totalDebit - totalCredit) < 0.01 && totalDebit > 0;
 
-    // Critical accounting invariant: A voucher must not be marked valid or CA Approved unless total debit equals total credit.
     if (decision === 'CA Approved' && !isBalanced) {
       return {
         ok: false,
@@ -1133,7 +1244,6 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
     }
 
-    // Update linked source document accounting status
     if (decision === 'CA Approved') {
       setDocuments((prev) =>
         prev.map((d) =>
@@ -1162,22 +1272,6 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       try {
         await updateDoc(doc(db, 'vouchers', voucherId), voucherUpdates);
         await setDoc(doc(db, 'caApprovals', approvalRecord.id), approvalRecord);
-        if (editedVoucher) {
-          for (const line of editedVoucher.entries) {
-            const entryObj: VoucherEntry = {
-              id: sanitizeId(line.id),
-              ownerUid: uid,
-              firmId: firm.id,
-              clientId: targetVoucher.clientId,
-              voucherId,
-              ledgerName: line.ledgerName.slice(0, 120),
-              ledgerGroup: line.ledgerGroup.slice(0, 60),
-              entryType: line.entryType,
-              amount: Number(line.amount),
-            };
-            await setDoc(doc(db, 'voucherEntries', entryObj.id), entryObj);
-          }
-        }
       } catch (error) {
         handleFirestoreError(error, OperationType.UPDATE, `vouchers/${voucherId}`);
       }
@@ -1190,7 +1284,7 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       reference: targetVoucher.voucherNumber,
       eventType: wasEdited ? `CA Corrected & ${decision}` : `CA Decision: ${decision}`,
       actor: userProfile?.displayName || 'CA Vikram Deshmukh',
-      description: `${wasEdited ? 'Modified AI ledger/amount lines and set status to ' : 'Updated voucher status to '}${decision} on ${targetVoucher.voucherNumber} (Dr ₹${totalDebit.toLocaleString('en-IN')} / Cr ₹${totalCredit.toLocaleString('en-IN')}). ${notes ? `Note: ${notes}` : ''}`,
+      description: `${wasEdited ? 'Modified AI lines and set status to ' : 'Set status to '}${decision} on ${targetVoucher.voucherNumber}.`,
     });
 
     return { ok: true };
@@ -1445,6 +1539,9 @@ ${xmlVouchers || '      <!-- No CA-Approved Vouchers Pending Export -->'}
         auditEvents,
         clientRequests,
         gstReconciliation,
+        signInWithEmail,
+        signUpWithEmail,
+        sendPasswordReset,
         signInWithGoogle,
         enterWorkspaceAsRole,
         signOutUser,

@@ -64,6 +64,7 @@ export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
+  businessName?: string;
   role: UserRole;
   firmId: string;
   clientId: string;

@@ -1,628 +1,628 @@
 import React, { useState, useRef } from 'react';
 import {
-  Upload,
+  UploadCloud,
   FileText,
   CheckCircle2,
   Clock,
-  MessageSquare,
-  Send,
+  ArrowUpRight,
+  Sun,
+  Moon,
   LogOut,
-  ArrowRightLeft,
-  FolderOpen,
+  ChevronDown,
+  Eye,
+  X,
+  FileSpreadsheet,
+  FileCheck,
+  Check,
+  Building2,
 } from 'lucide-react';
 import { useFenora } from '../context/FenoraContext';
+import { useTheme } from '../context/ThemeContext';
 import { FenoraLogo } from './FenoraLogo';
-import { DOCUMENT_CATEGORIES, FINANCIAL_YEARS } from '../data/seedData';
 import { DocumentCategory } from '../types/accounting';
 
-interface ClientPortalViewProps {
-  onOpenRoleModal: () => void;
-}
-
-export const ClientPortalView: React.FC<ClientPortalViewProps> = ({ onOpenRoleModal }) => {
+export const ClientPortalView: React.FC = () => {
+  const { theme, toggleTheme } = useTheme();
   const {
     clients,
     activePortalClientId,
-    enterWorkspaceAsRole,
     documents,
-    clientRequests,
+    financialYears,
     uploadDocument,
     triggerAIProcessingForDoc,
-    createClientRequest,
-    updateClientRequestStatus,
-    firebaseUser,
-    signInWithGoogle,
     signOutUser,
+    userProfile,
   } = useFenora();
 
   const currentClient =
-    clients.find((c) => c.id === activePortalClientId) || clients[0];
+    clients.find((c) => c.id === activePortalClientId) || clients[0] || {
+      id: 'client_aravind_tex',
+      name: userProfile?.displayName || 'Aravind Technical Textiles Pvt Ltd',
+      code: 'ATX',
+      financialYear: '2026-27',
+      gstin: '33AABCA1234F1Z8',
+    };
 
-  const [activeTab, setActiveTab] = useState<'upload' | 'requests' | 'messages'>('upload');
   const [selectedFY, setSelectedFY] = useState<string>(currentClient?.financialYear || '2026-27');
-  const [selectedPeriod, setSelectedPeriod] = useState<string>('Nov 2026');
-  const [selectedCategory, setSelectedCategory] = useState<DocumentCategory>('Purchase Invoice');
-  const [vendorName, setVendorName] = useState<string>('');
-  const [amountInput, setAmountInput] = useState<string>('');
+  const [selectedPeriod] = useState<string>('Nov 2026');
   const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
-
-  const [msgTitle, setMsgTitle] = useState<string>('');
-  const [msgCategory, setMsgCategory] = useState<string>('Purchase Invoice');
-  const [msgBody, setMsgBody] = useState<string>('');
-  const [replyTextMap, setReplyTextMap] = useState<Record<string, string>>({});
+  const [previewDoc, setPreviewDoc] = useState<any | null>(null);
+  const [userMenuOpen, setUserMenuOpen] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const targetCategoryRef = useRef<DocumentCategory>('Purchase Invoice');
 
-  const clientDocs = documents.filter((d) => d.clientId === currentClient?.id);
-  const myRequests = clientRequests.filter((r) => r.clientId === currentClient?.id);
-  const pendingRequests = myRequests.filter((r) => r.status === 'Pending Client');
+  // Filter client documents for current client & FY
+  const clientDocs = documents.filter(
+    (d) => d.clientId === currentClient.id && (selectedFY ? d.financialYear === selectedFY : true)
+  );
 
-  const handleFilesSelected = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0 || !currentClient) return;
-    const file = fileList[0];
+  // Status metrics
+  const submittedCount = clientDocs.length;
+  const processedCount = clientDocs.filter(
+    (d) => d.processingStatus === 'Completed' || d.accountingStatus === 'CA Approved'
+  ).length;
+  const pendingCount = clientDocs.filter(
+    (d) =>
+      d.processingStatus === 'Queued' ||
+      d.processingStatus === 'Analyzing' ||
+      d.accountingStatus === 'Unprocessed' ||
+      d.accountingStatus === 'Voucher Drafted'
+  ).length;
+
+  // Required documents configuration
+  const requiredCategories: {
+    category: DocumentCategory;
+    title: string;
+    description: string;
+    icon: typeof FileText;
+  }[] = [
+    {
+      category: 'Bank Statement',
+      title: 'Bank Statement',
+      description: 'Official monthly e-statement',
+      icon: FileSpreadsheet,
+    },
+    {
+      category: 'Purchase Invoice',
+      title: 'Purchase Invoices',
+      description: 'Vendor bills & input tax invoices',
+      icon: FileText,
+    },
+    {
+      category: 'Sales Invoice',
+      title: 'Sales Invoices',
+      description: 'Outward customer invoices & receipts',
+      icon: FileText,
+    },
+    {
+      category: 'Expense Bill',
+      title: 'Expense Bills',
+      description: 'Utility, logistics & operational receipts',
+      icon: FileText,
+    },
+  ];
+
+  const handleFileUpload = async (files: FileList | null, category?: DocumentCategory) => {
+    if (!files || files.length === 0 || !currentClient) return;
+
+    const file = files[0];
+    const cat = category || targetCategoryRef.current;
     const ext = file.name.split('.').pop()?.toUpperCase() || 'PDF';
-    const sizeKb = Math.max(12, Math.round(file.size / 1024));
+    const sizeKb = Math.max(24, Math.round(file.size / 1024));
 
-    const created = await uploadDocument({
-      clientId: currentClient.id,
-      fileName: file.name,
-      fileType: ext,
-      fileSize: `${sizeKb} KB`,
-      financialYear: selectedFY,
-      period: selectedPeriod,
-      category: selectedCategory,
-      vendorOrParty: vendorName.trim() || undefined,
-      totalAmount: amountInput ? Number(amountInput) : undefined,
-    });
+    // Progress animation
+    setUploadProgress(20);
+    const pInterval = setInterval(() => {
+      setUploadProgress((prev) => {
+        if (!prev) return 30;
+        if (prev >= 85) {
+          clearInterval(pInterval);
+          return 90;
+        }
+        return prev + 25;
+      });
+    }, 180);
 
-    setVendorName('');
-    setAmountInput('');
-    setUploadNotice(`Uploaded "${file.name}". Simulated extraction started.`);
-    setTimeout(() => {
-      triggerAIProcessingForDoc(created.id);
-    }, 900);
-    setTimeout(() => setUploadNotice(null), 4500);
+    try {
+      const created = await uploadDocument({
+        clientId: currentClient.id,
+        fileName: file.name,
+        fileType: ext,
+        fileSize: `${sizeKb} KB`,
+        financialYear: selectedFY,
+        period: selectedPeriod,
+        category: cat,
+      });
+
+      clearInterval(pInterval);
+      setUploadProgress(100);
+      setUploadNotice(`Received ${file.name}`);
+
+      setTimeout(() => {
+        triggerAIProcessingForDoc(created.id);
+        setUploadProgress(null);
+      }, 700);
+
+      setTimeout(() => setUploadNotice(null), 3500);
+    } catch {
+      clearInterval(pInterval);
+      setUploadProgress(null);
+    }
   };
 
-  const handleQuickDemoUpload = async (sampleName: string, category: DocumentCategory, vendor: string, amt: number) => {
-    if (!currentClient) return;
-    const created = await uploadDocument({
-      clientId: currentClient.id,
-      fileName: sampleName,
-      fileType: sampleName.endsWith('.xlsx') ? 'XLSX' : 'PDF',
-      fileSize: '340 KB',
-      financialYear: selectedFY,
-      period: selectedPeriod,
-      category,
-      vendorOrParty: vendor,
-      totalAmount: amt,
-    });
-    setUploadNotice(`Uploaded "${sampleName}". Simulated processing triggered.`);
-    setTimeout(() => {
-      triggerAIProcessingForDoc(created.id);
-    }, 800);
-    setTimeout(() => setUploadNotice(null), 4000);
+  const triggerSpecificUpload = (cat: DocumentCategory) => {
+    targetCategoryRef.current = cat;
+    fileInputRef.current?.click();
   };
 
-  const handleSendClientMessage = async (e: React.FormEvent) => {
+  const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    if (!msgTitle.trim() || !msgBody.trim() || !currentClient) return;
-    await createClientRequest({
-      clientId: currentClient.id,
-      financialYear: selectedFY,
-      title: msgTitle.trim(),
-      category: msgCategory,
-      message: msgBody.trim(),
-    });
-    setMsgTitle('');
-    setMsgBody('');
+    setIsDragging(true);
   };
 
-  const getClientFriendlyStatus = (docStatus: string) => {
-    if (docStatus === 'Completed') return 'Processed by CA System';
-    if (docStatus === 'Analyzing' || docStatus === 'Queued') return 'Processing';
-    return 'Attention Needed';
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFileUpload(e.dataTransfer.files);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
-      {/* Strict 3-Zone Top Bar Contract */}
-      <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between gap-8">
-        <FenoraLogo />
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
+      {/* Hidden File Input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={(e) => handleFileUpload(e.target.files)}
+        multiple={false}
+        accept=".pdf,.png,.jpg,.jpeg,.xlsx,.csv"
+        className="hidden"
+      />
 
-        <nav className="flex items-center gap-6 text-sm font-medium text-slate-600">
-          <button
-            type="button"
-            onClick={() => setActiveTab('upload')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
-              activeTab === 'upload'
-                ? 'border-slate-900 text-slate-900 font-semibold'
-                : 'border-transparent hover:text-slate-900'
-            }`}
-          >
-            Documents & Upload
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('requests')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
-              activeTab === 'requests'
-                ? 'border-slate-900 text-slate-900 font-semibold'
-                : 'border-transparent hover:text-slate-900'
-            }`}
-          >
-            CA Requests ({pendingRequests.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('messages')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
-              activeTab === 'messages'
-                ? 'border-slate-900 text-slate-900 font-semibold'
-                : 'border-transparent hover:text-slate-900'
-            }`}
-          >
-            Ask CA
-          </button>
-        </nav>
+      {/* TOP SECTION: Apple-grade Minimal Navbar */}
+      <header className="sticky top-0 z-30 w-full glass-panel border-b border-slate-200/80 dark:border-slate-800/80 px-6 sm:px-10 py-3.5 flex items-center justify-between transition-colors">
+        {/* Left: Brand & Client Identity */}
+        <div className="flex items-center gap-6">
+          <FenoraLogo dark={theme === 'dark'} />
+          <div className="hidden sm:flex items-center gap-2 pl-4 border-l border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+            <Building2 className="w-3.5 h-3.5 text-slate-400" />
+            <span className="font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[200px]">
+              {userProfile?.businessName || currentClient.name}
+            </span>
+          </div>
+        </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Right: Controls & Profile (Strictly NO CA role switching) */}
+        <div className="flex items-center gap-3">
+          {/* Financial Year Selector */}
+          <div className="relative">
+            <select
+              value={selectedFY}
+              onChange={(e) => setSelectedFY(e.target.value)}
+              className="appearance-none pl-3 pr-7 py-1.5 rounded-full text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer transition-colors"
+            >
+              {financialYears.length > 0 ? (
+                financialYears.map((fy) => (
+                  <option key={fy.id} value={fy.label}>
+                    FY {fy.label}
+                  </option>
+                ))
+              ) : (
+                <>
+                  <option value="2026-27">FY 2026-27</option>
+                  <option value="2025-26">FY 2025-26</option>
+                </>
+              )}
+            </select>
+            <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2.5 top-2.5 pointer-events-none" />
+          </div>
+
+          {/* Theme Toggle */}
           <button
             type="button"
-            onClick={onOpenRoleModal}
-            className="px-3.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            onClick={toggleTheme}
+            aria-label="Toggle theme"
+            className="p-2 rounded-full hover:bg-slate-200/60 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors"
           >
-            <ArrowRightLeft className="w-3.5 h-3.5" />
-            Switch View
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
+
+          {/* User Account Menu (Strict Client Profile & Sign Out Only) */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setUserMenuOpen(!userMenuOpen)}
+              className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-full hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
+            >
+              <div className="w-7 h-7 rounded-full bg-slate-900 dark:bg-emerald-600 text-white flex items-center justify-center text-xs font-semibold">
+                {(userProfile?.displayName || currentClient.name).slice(0, 1)}
+              </div>
+              <ChevronDown className="w-3 h-3 text-slate-400" />
+            </button>
+
+            {userMenuOpen && (
+              <div className="absolute right-0 mt-2 w-56 rounded-2xl glass-modal shadow-xl border border-slate-200/80 dark:border-slate-800 p-2 z-50 text-xs">
+                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800/80 mb-1">
+                  <p className="font-semibold text-slate-900 dark:text-white truncate">
+                    {userProfile?.displayName || currentClient.name}
+                  </p>
+                  {userProfile?.businessName && (
+                    <p className="text-[11px] text-emerald-600 dark:text-emerald-400 truncate">
+                      {userProfile.businessName}
+                    </p>
+                  )}
+                  <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                    {userProfile?.email || 'client@fenora.in'}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    signOutUser();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors text-left"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* Main Client Workspace Container */}
-      <main className="flex-1 max-w-5xl w-full mx-auto px-6 py-8 space-y-8">
-        {/* Client Context Bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
+      {/* MAIN SECTION: Spacious, effortless, client-centric */}
+      <main className="flex-1 max-w-5xl w-full mx-auto px-6 sm:px-10 py-8 sm:py-12 space-y-10">
+        {/* A. CLIENT GREETING */}
+        <section className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
-            <p className="text-xs text-slate-500">
-              Client Portal · FY {selectedFY} · GSTIN {currentClient?.gstin}
-            </p>
-            <h1 className="text-2xl font-semibold text-slate-900 tracking-tight mt-0.5">
-              {currentClient?.name}
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">
+              {userProfile?.businessName || currentClient.name}
             </h1>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="text-xs text-slate-500">Client Account:</label>
-            <select
-              value={currentClient?.id || ''}
-              onChange={(e) => enterWorkspaceAsRole('client', e.target.value)}
-              className="text-xs font-medium bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-800 focus:outline-none focus:border-slate-900"
-            >
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.code})
-                </option>
-              ))}
-            </select>
-            {!firebaseUser ? (
-              <button
-                type="button"
-                onClick={() => signInWithGoogle('client', currentClient?.id)}
-                className="px-3 py-2 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-md transition-colors whitespace-nowrap shrink-0"
-              >
-                Sign in with Google
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={signOutUser}
-                className="px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 whitespace-nowrap shrink-0"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                Sign Out
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Summary Strip */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-white border border-slate-200 rounded-lg p-5">
-            <span className="text-xs text-slate-500">Submitted Documents</span>
-            <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">
-              {clientDocs.length}
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">
+              Account: {userProfile?.displayName || currentClient.name} · GSTIN: {currentClient.gstin || '33AABCA1234F1Z8'}
             </p>
           </div>
-          <div className="bg-white border border-slate-200 rounded-lg p-5">
-            <span className="text-xs text-slate-500">Processed</span>
-            <p className="text-2xl font-semibold font-mono tabular-nums text-emerald-700 mt-1">
-              {clientDocs.filter((d) => d.processingStatus === 'Completed').length}
-            </p>
+
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/60 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-300 self-start sm:self-auto">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span>Document Portal Active</span>
           </div>
-          <div className="bg-white border border-slate-200 rounded-lg p-5">
-            <span className="text-xs text-slate-500">Pending CA Requests</span>
-            <p className="text-2xl font-semibold font-mono tabular-nums text-amber-700 mt-1">
-              {pendingRequests.length}
-            </p>
+        </section>
+
+        {/* B. DOCUMENT STATUS (3 Clean Visual Indicators) */}
+        <section className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+          {/* Submitted */}
+          <div className="glass-panel rounded-2xl p-6 transition-all hover:border-slate-300 dark:hover:border-slate-700">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Submitted
+              </span>
+              <FileCheck className="w-4 h-4 text-blue-500" />
+            </div>
+            <div className="mt-4 flex items-baseline gap-2">
+              <span className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white tabular-nums">
+                {submittedCount}
+              </span>
+              <span className="text-xs text-slate-400">documents</span>
+            </div>
           </div>
-        </div>
 
-        {uploadNotice && (
-          <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-sm text-emerald-900 flex items-center justify-between">
-            <span>{uploadNotice}</span>
-            <button
-              type="button"
-              onClick={() => setUploadNotice(null)}
-              className="text-xs font-medium underline"
-            >
-              Dismiss
-            </button>
+          {/* Pending */}
+          <div className="glass-panel rounded-2xl p-6 transition-all hover:border-slate-300 dark:hover:border-slate-700">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Pending
+              </span>
+              <Clock className="w-4 h-4 text-amber-500" />
+            </div>
+            <div className="mt-4 flex items-baseline gap-2">
+              <span className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white tabular-nums">
+                {pendingCount}
+              </span>
+              <span className="text-xs text-slate-400">in processing</span>
+            </div>
           </div>
-        )}
 
-        {activeTab === 'upload' && (
-          <div className="space-y-8">
-            {/* Simple 2-Step Upload Box */}
-            <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-base font-semibold text-slate-900">
-                    Upload Accounting Documents
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Select period and category, then drop your invoice, bill, or statement.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleQuickDemoUpload(
-                        `Purchase_Inv_${Math.floor(100 + Math.random() * 899)}.pdf`,
-                        selectedCategory,
-                        vendorName || 'vikas Industrial Fasteners',
-                        Number(amountInput) || 141600
-                      )
-                    }
-                    className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0"
-                  >
-                    + Instant Sample Upload
-                  </button>
-                </div>
-              </div>
-
-              {/* Selectors */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Financial Year
-                  </label>
-                  <select
-                    value={selectedFY}
-                    onChange={(e) => setSelectedFY(e.target.value)}
-                    className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                  >
-                    {FINANCIAL_YEARS.map((fy) => (
-                      <option key={fy} value={fy}>
-                        FY {fy}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Period
-                  </label>
-                  <select
-                    value={selectedPeriod}
-                    onChange={(e) => setSelectedPeriod(e.target.value)}
-                    className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                  >
-                    {['Nov 2026', 'Oct 2026', 'Sep 2026', 'Q2 FY26-27'].map((p) => (
-                      <option key={p} value={p}>
-                        {p}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Document Category
-                  </label>
-                  <select
-                    value={selectedCategory}
-                    onChange={(e) => setSelectedCategory(e.target.value as DocumentCategory)}
-                    className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                  >
-                    {DOCUMENT_CATEGORIES.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Optional Party / Amount */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Supplier / Customer Name (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={vendorName}
-                    onChange={(e) => setVendorName(e.target.value)}
-                    placeholder="e.g. Surat Synthetic Yarn Mills"
-                    className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Invoice Amount in ₹ (Optional)
-                  </label>
-                  <input
-                    type="number"
-                    value={amountInput}
-                    onChange={(e) => setAmountInput(e.target.value)}
-                    placeholder="e.g. 118000"
-                    className="w-full text-sm font-mono tabular-nums bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                  />
-                </div>
-              </div>
-
-              {/* Drop Zone */}
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDragging(true);
-                }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setIsDragging(false);
-                  handleFilesSelected(e.dataTransfer.files);
-                }}
-                onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-                  isDragging
-                    ? 'border-emerald-600 bg-emerald-50/40'
-                    : 'border-slate-300 hover:border-slate-400 bg-slate-50/60'
-                }`}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png,.xlsx,.csv"
-                  onChange={(e) => handleFilesSelected(e.target.files)}
-                  className="hidden"
-                />
-                <Upload className="w-6 h-6 text-slate-500 mx-auto mb-2" />
-                <p className="text-sm font-medium text-slate-900">
-                  Drop files here or click to browse
-                </p>
-                <p className="text-xs text-slate-500 mt-1">
-                  Supports PDF, JPG, JPEG, PNG, XLSX, CSV
-                </p>
-              </div>
-            </section>
-
-            {/* Submitted Documents Table */}
-            <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-slate-900">
-                  Recent Submissions
-                </h2>
-                <span className="text-xs text-slate-500 font-mono tabular-nums">
-                  {clientDocs.length} files
-                </span>
-              </div>
-
-              {clientDocs.length === 0 ? (
-                <div className="p-10 text-center">
-                  <FolderOpen className="w-6 h-6 text-slate-400 mx-auto mb-2" />
-                  <p className="text-sm text-slate-600">No documents uploaded yet.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-xs text-slate-500 bg-slate-50/60">
-                        <th className="py-3 px-6 font-medium">Document</th>
-                        <th className="py-3 px-4 font-medium">Category · Period</th>
-                        <th className="py-3 px-4 font-medium">Uploaded</th>
-                        <th className="py-3 px-6 font-medium text-right">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 text-sm">
-                      {clientDocs.map((docItem) => (
-                        <tr key={docItem.id} className="hover:bg-slate-50/80">
-                          <td className="py-3.5 px-6">
-                            <div className="flex items-center gap-2.5">
-                              <FileText className="w-4 h-4 text-slate-400 shrink-0" />
-                              <div>
-                                <p className="font-medium text-slate-900">{docItem.fileName}</p>
-                                <p className="text-xs text-slate-500">
-                                  {docItem.vendorOrParty} · ₹{docItem.totalAmount.toLocaleString('en-IN')}
-                                </p>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-4 text-xs text-slate-600">
-                            {docItem.category} · {docItem.period} (FY {docItem.financialYear})
-                          </td>
-                          <td className="py-3.5 px-4 text-xs font-mono tabular-nums text-slate-500">
-                            {docItem.uploadDate}
-                          </td>
-                          <td className="py-3.5 px-6 text-right text-xs font-medium">
-                            {docItem.processingStatus === 'Completed' ? (
-                              <span className="inline-flex items-center gap-1 text-emerald-700">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                {getClientFriendlyStatus(docItem.processingStatus)}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-amber-700">
-                                <Clock className="w-3.5 h-3.5" />
-                                {getClientFriendlyStatus(docItem.processingStatus)}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
+          {/* Processed */}
+          <div className="glass-panel rounded-2xl p-6 transition-all hover:border-slate-300 dark:hover:border-slate-700">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Processed
+              </span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+            </div>
+            <div className="mt-4 flex items-baseline gap-2">
+              <span className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white tabular-nums">
+                {processedCount}
+              </span>
+              <span className="text-xs text-slate-400">verified by CA</span>
+            </div>
           </div>
-        )}
+        </section>
 
-        {activeTab === 'requests' && (
-          <section className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-200">
-            <div className="px-6 py-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-semibold text-slate-900">
-                  Document Requests from Your CA
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Respond to pending queries or mark documents as submitted.
-                </p>
+        {/* C. DOCUMENT UPLOAD (HERO ELEMENT — Clean & Bright) */}
+        <section>
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => {
+              targetCategoryRef.current = 'Purchase Invoice';
+              fileInputRef.current?.click();
+            }}
+            className={`cursor-pointer rounded-3xl p-10 sm:p-14 text-center transition-all duration-300 relative overflow-hidden group border-2 border-dashed ${
+              isDragging
+                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 scale-[1.01]'
+                : 'border-slate-300/80 dark:border-slate-800 hover:border-emerald-500/80 bg-white dark:bg-slate-900/60 shadow-sm dark:shadow-none'
+            } emerald-glow`}
+          >
+            <div className="relative z-10 flex flex-col items-center">
+              <div className="w-16 h-16 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 mb-5 group-hover:scale-110 transition-transform duration-200">
+                <UploadCloud className="w-8 h-8" />
+              </div>
+
+              <h2 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white">
+                Drop files or click to upload
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium">
+                Invoices, bank statements, bills or Excel sheets
+              </p>
+
+              {/* Supported file tags */}
+              <div className="flex flex-wrap items-center justify-center gap-1.5 mt-5">
+                {['PDF', 'JPG', 'PNG', 'XLSX', 'CSV'].map((format) => (
+                  <span
+                    key={format}
+                    className="px-2.5 py-1 rounded-md text-[11px] font-mono font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60"
+                  >
+                    {format}
+                  </span>
+                ))}
               </div>
             </div>
 
-            {myRequests.length === 0 ? (
-              <div className="p-8 text-center text-sm text-slate-500">
-                No active requests for {currentClient?.name}.
+            {/* Upload Progress Bar */}
+            {uploadProgress !== null && (
+              <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500 transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                />
               </div>
-            ) : (
-              myRequests.map((req) => (
-                <div key={req.id} className="p-6 space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs text-slate-500">
-                        {req.category} · FY {req.financialYear} · Updated {req.updatedAt}
-                      </p>
-                      <h3 className="text-sm font-semibold text-slate-900 mt-0.5">
-                        {req.title}
-                      </h3>
-                    </div>
-                    <span
-                      className={`text-xs font-medium ${
-                        req.status === 'Pending Client'
-                          ? 'text-amber-700'
-                          : 'text-emerald-700'
+            )}
+          </div>
+
+          {/* Feedback Toast */}
+          {uploadNotice && (
+            <div className="mt-3 p-3 rounded-2xl glass-panel text-xs text-emerald-600 dark:text-emerald-400 font-medium flex items-center justify-center gap-2">
+              <Check className="w-4 h-4 shrink-0" />
+              <span>{uploadNotice}</span>
+            </div>
+          )}
+        </section>
+
+        {/* D. REQUIRED DOCUMENTS CHECKLIST */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold tracking-tight uppercase text-slate-400">
+              Required Documents
+            </h3>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {clientDocs.length} on file
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            {requiredCategories.map((item) => {
+              const matchingDocs = clientDocs.filter((d) => d.category === item.category);
+              const isUploaded = matchingDocs.length > 0;
+              const Icon = item.icon;
+
+              return (
+                <div
+                  key={item.category}
+                  className="glass-panel rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-4 transition-all hover:border-slate-300 dark:hover:border-slate-700"
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <div
+                      className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+                        isUploaded
+                          ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400'
+                          : 'bg-slate-100 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-400'
                       }`}
                     >
-                      {req.status}
-                    </span>
+                      <Icon className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white truncate">
+                        {item.title}
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                        {item.description}
+                      </p>
+                    </div>
                   </div>
 
-                  <p className="text-sm text-slate-700 bg-slate-50 border border-slate-200/80 rounded-md p-3.5">
-                    {req.message}
-                  </p>
-
-                  {req.status === 'Pending Client' && (
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
-                      <input
-                        type="text"
-                        value={replyTextMap[req.id] || ''}
-                        onChange={(e) =>
-                          setReplyTextMap((prev) => ({ ...prev, [req.id]: e.target.value }))
-                        }
-                        placeholder="Add a note for your CA..."
-                        className="flex-1 text-xs bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                      />
+                  <div>
+                    {isUploaded ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60 shrink-0">
+                        <Check className="w-3 h-3" />
+                        <span>Ready</span>
+                      </span>
+                    ) : (
                       <button
                         type="button"
-                        onClick={() => {
-                          updateClientRequestStatus(
-                            req.id,
-                            'Submitted',
-                            replyTextMap[req.id] || 'Uploaded requested document.'
-                          );
-                          setReplyTextMap((prev) => ({ ...prev, [req.id]: '' }));
-                        }}
-                        className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md transition-colors whitespace-nowrap shrink-0"
+                        onClick={() => triggerSpecificUpload(item.category)}
+                        className="px-3 py-1.5 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 transition-colors flex items-center gap-1 shrink-0"
                       >
-                        Mark Submitted
+                        <span>Upload</span>
+                        <ArrowUpRight className="w-3 h-3 text-slate-400" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* E. RECENT DOCUMENTS */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold tracking-tight uppercase text-slate-400">
+              Recent Documents
+            </h3>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              FY {selectedFY}
+            </span>
+          </div>
+
+          {clientDocs.length === 0 ? (
+            <div className="glass-panel rounded-2xl p-10 text-center">
+              <p className="text-xs text-slate-400">
+                No documents uploaded for this period yet.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {clientDocs.slice(0, 8).map((doc) => {
+                const isCompleted =
+                  doc.processingStatus === 'Completed' || doc.accountingStatus === 'CA Approved';
+                const isAnalyzing =
+                  doc.processingStatus === 'Analyzing' || doc.processingStatus === 'Queued';
+
+                return (
+                  <div
+                    key={doc.id}
+                    className="glass-panel rounded-2xl p-4 sm:px-6 flex items-center justify-between gap-4 transition-all hover:border-slate-300 dark:hover:border-slate-700"
+                  >
+                    {/* Left: Icon & Title */}
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 flex items-center justify-center text-slate-600 dark:text-slate-300 shrink-0">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs sm:text-sm font-medium text-slate-900 dark:text-white truncate">
+                          {doc.fileName}
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
+                          {doc.period} · {doc.category} {doc.fileSize ? `· ${doc.fileSize}` : ''}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Right: Status badge & Preview Action */}
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+                          isCompleted
+                            ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                            : isAnalyzing
+                            ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-800'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        {isCompleted ? 'Processed' : isAnalyzing ? 'Processing' : 'Uploaded'}
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => setPreviewDoc(doc)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                        title="View details"
+                      >
+                        <Eye className="w-4 h-4" />
                       </button>
                     </div>
-                  )}
-                </div>
-              ))
-            )}
-          </section>
-        )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </main>
 
-        {activeTab === 'messages' && (
-          <section className="bg-white border border-slate-200 rounded-lg p-6 max-w-2xl">
-            <div className="flex items-center gap-2 mb-4">
-              <MessageSquare className="w-4 h-4 text-slate-700" />
-              <h2 className="text-base font-semibold text-slate-900">
-                Send a Note or Query to Your CA Firm
-              </h2>
+      {/* DOCUMENT PREVIEW MODAL */}
+      {previewDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-xs">
+          <div className="glass-modal rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+              <h4 className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                {previewDoc.fileName}
+              </h4>
+              <button
+                type="button"
+                onClick={() => setPreviewDoc(null)}
+                className="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            <form onSubmit={handleSendClientMessage} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Subject
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={msgTitle}
-                  onChange={(e) => setMsgTitle(e.target.value)}
-                  placeholder="e.g. Clarification on October credit note"
-                  className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                />
+            <div className="py-4 space-y-3 text-xs">
+              <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800/60">
+                <span className="text-slate-400">Category</span>
+                <span className="font-medium text-slate-800 dark:text-slate-200">
+                  {previewDoc.category}
+                </span>
               </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Related Category
-                </label>
-                <select
-                  value={msgCategory}
-                  onChange={(e) => setMsgCategory(e.target.value)}
-                  className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                >
-                  {DOCUMENT_CATEGORIES.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
+              <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800/60">
+                <span className="text-slate-400">Period</span>
+                <span className="font-mono text-slate-800 dark:text-slate-200">
+                  {previewDoc.period} ({previewDoc.financialYear})
+                </span>
               </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Message
-                </label>
-                <textarea
-                  rows={4}
-                  required
-                  value={msgBody}
-                  onChange={(e) => setMsgBody(e.target.value)}
-                  placeholder="Write a brief message for your Chartered Accountant..."
-                  className="w-full text-sm bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:outline-none focus:border-slate-900"
-                />
+              <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800/60">
+                <span className="text-slate-400">Format & Size</span>
+                <span className="font-mono text-slate-800 dark:text-slate-200">
+                  {previewDoc.fileType} · {previewDoc.fileSize}
+                </span>
               </div>
+              <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800/60">
+                <span className="text-slate-400">Status</span>
+                <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                  {previewDoc.processingStatus || previewDoc.accountingStatus}
+                </span>
+              </div>
+              {previewDoc.vendorOrParty && (
+                <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800/60">
+                  <span className="text-slate-400">Vendor / Party</span>
+                  <span className="font-medium text-slate-800 dark:text-slate-200">
+                    {previewDoc.vendorOrParty}
+                  </span>
+                </div>
+              )}
+              {previewDoc.totalAmount !== undefined && (
+                <div className="flex justify-between py-1">
+                  <span className="text-slate-400">Total Value</span>
+                  <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
+                    ₹{previewDoc.totalAmount.toLocaleString('en-IN')}
+                  </span>
+                </div>
+              )}
+            </div>
 
-              <button
-                type="submit"
-                className="px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-md transition-colors inline-flex items-center gap-1.5"
-              >
-                <Send className="w-3.5 h-3.5" />
-                Send Message
-              </button>
-            </form>
-          </section>
-        )}
-      </main>
+            <button
+              type="button"
+              onClick={() => setPreviewDoc(null)}
+              className="w-full mt-2 py-2.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 text-white transition-colors"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
