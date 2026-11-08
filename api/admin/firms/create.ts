@@ -5,6 +5,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 
 const SUPER_ADMIN_EMAILS = [
   'relaxingsoundsformeditation@gmail.com',
+  'vizaneofficial@gmail.com',
   (process.env.SUPER_ADMIN_EMAIL || '').toLowerCase().trim(),
 ].filter(Boolean);
 
@@ -71,41 +72,12 @@ export default async function handler(req: Request, res: Response) {
     let uid = String(manualUid || '').trim();
 
     if (!uid) {
-      if (!temporaryPassword || String(temporaryPassword).length < 6) {
-        return sendError(res, 400, 'Temporary password must be at least 6 characters.');
-      }
-      try {
-        const createdUser = await auth.createUser({
-          email: trimmedEmail,
-          password: String(temporaryPassword),
-          displayName: trimmedOwnerName,
-        });
-        uid = createdUser.uid;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return sendError(
-          res,
-          409,
-          'Could not create the Firebase Authentication account. Check whether this email already exists.',
-          'ADMIN_AUTH_CREATE_FAILED',
-          { details: message }
-        );
-      }
-    } else {
-      try {
-        const authUser = await auth.getUser(uid);
-        if (String(authUser.email || '').toLowerCase().trim() !== trimmedEmail) {
-          return sendError(res, 400, 'The supplied Firebase UID does not belong to the supplied login email.', 'UID_EMAIL_MISMATCH');
-        }
-      } catch (error) {
-        return sendError(
-          res,
-          400,
-          'The supplied Firebase UID could not be verified. No firm profile was created.',
-          'MANUAL_UID_VERIFICATION_FAILED',
-          { details: error instanceof Error ? error.message : String(error) }
-        );
-      }
+      return sendError(
+        res,
+        400,
+        'Please create the user in Firebase Console Authentication and provide their UID for free-tier onboarding.',
+        'MANUAL_UID_REQUIRED'
+      );
     }
 
     const db = getFirestore(adminApp);

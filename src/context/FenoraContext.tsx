@@ -373,7 +373,9 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Super Admin real-time listener for all firms
   useEffect(() => {
     if (!authReady || !firebaseUser) return;
-    const isSuperAdmin = (firebaseUser.email || '').toLowerCase() === 'relaxingsoundsformeditation@gmail.com';
+    const isSuperAdmin = ['relaxingsoundsformeditation@gmail.com', 'vizaneofficial@gmail.com'].includes(
+      (firebaseUser.email || '').toLowerCase().trim()
+    );
     if (!isSuperAdmin) return;
 
     const unsub = onSnapshot(
@@ -569,7 +571,7 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       try {
         // 1. Super Admin automatic detection
-        const isSuperAdmin = userEmail === 'relaxingsoundsformeditation@gmail.com';
+        const isSuperAdmin = ['relaxingsoundsformeditation@gmail.com', 'vizaneofficial@gmail.com'].includes(userEmail);
         if (isSuperAdmin) {
           const userSnap = await getDoc(userRef);
           let adminProfile: UserProfile;
@@ -1515,30 +1517,113 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     manualUid?: string;
   }): Promise<{ ok: boolean; error?: string; errorType?: string; guidance?: string }> => {
     if (!firebaseUser) return { ok: false, error: 'Not authenticated as administrator.' };
-    try {
-      const idToken = await firebaseUser.getIdToken();
-      const res = await fetch('/api/admin/firms/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify(input),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        return {
-          ok: false,
-          error: data.error || 'Failed to create firm.',
-          errorType: data.errorType,
-          guidance: data.guidance,
-        };
-      }
-      return { ok: true };
-    } catch (err) {
+
+    const trimmedUid = (input.manualUid || '').trim();
+    const trimmedEmail = (input.email || '').trim().toLowerCase();
+    const trimmedFirmName = (input.firmName || '').trim();
+    const trimmedOwnerName = (input.ownerName || '').trim();
+
+    if (!trimmedFirmName) return { ok: false, error: 'Firm name is required.' };
+    if (!trimmedOwnerName) return { ok: false, error: "Owner's full name is required." };
+    if (!trimmedEmail) return { ok: false, error: 'Login email is required.' };
+    if (!trimmedUid) {
       return {
         ok: false,
-        error: err instanceof Error ? err.message : 'Network error creating firm.',
+        error: 'Firebase Auth User UID is required. Please create the user in Firebase Console and paste their UID.',
+      };
+    }
+
+    if (!/^[a-zA-Z0-9_-]+$/.test(trimmedUid) || trimmedUid.length < 5) {
+      return {
+        ok: false,
+        error: 'Invalid Firebase UID format. Please copy the exact UID from Firebase Console Authentication.',
+      };
+    }
+
+    const firmId = `firm_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const nowIso = new Date().toISOString().slice(0, 35);
+
+    const firmData: Firm = {
+      id: firmId,
+      firmId: firmId,
+      ownerUid: trimmedUid,
+      name: trimmedFirmName,
+      firmName: trimmedFirmName,
+      ownerName: trimmedOwnerName,
+      email: trimmedEmail,
+      role: 'firm_owner',
+      status: 'active',
+      active: true,
+      mustChangePassword: true,
+      driveConnected: false,
+      driveEmail: '',
+      driveOnboardingCompleted: false,
+      registrationNo: 'CA-REG',
+      gstin: 'Pending',
+      city: 'India',
+      defaultFinancialYear: '2026-27',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const userData: UserProfile = {
+      uid: trimmedUid,
+      email: trimmedEmail,
+      displayName: trimmedOwnerName,
+      fullName: trimmedOwnerName,
+      role: 'firm_owner',
+      firmId: firmId,
+      clientId: 'ca_owner',
+      membershipStatus: 'APPROVED',
+      mustChangePassword: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    try {
+      // 1. Direct write via authenticated Superadmin Client SDK
+      await setDoc(doc(db, 'firms', firmId), firmData);
+      await setDoc(doc(db, 'users', trimmedUid), userData);
+
+      // 2. Safely inform server API in background (with safe JSON response handling)
+      try {
+        const idToken = await firebaseUser.getIdToken();
+        const res = await fetch('/api/admin/firms/create', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            firmId,
+            firmName: trimmedFirmName,
+            ownerName: trimmedOwnerName,
+            email: trimmedEmail,
+            manualUid: trimmedUid,
+          }),
+        });
+
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          await res.json().catch(() => null);
+        }
+      } catch {
+        // Server notification is non-fatal since Client SDK has already successfully written Firestore records
+      }
+
+      return { ok: true };
+    } catch (err: unknown) {
+      console.error('[Create Firm Error]', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('permission') || msg.includes('PERMISSION_DENIED')) {
+        return {
+          ok: false,
+          error: 'Permission denied: Your account is not recognized as a Fenora Super Administrator in Firestore rules.',
+        };
+      }
+      return {
+        ok: false,
+        error: `Failed to create firm in Firestore: ${msg}`,
       };
     }
   };
@@ -1548,26 +1633,40 @@ export const FenoraProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     status: 'active' | 'suspended'
   ): Promise<{ ok: boolean; error?: string }> => {
     if (!firebaseUser) return { ok: false, error: 'Not authenticated as administrator.' };
+    const nowIso = new Date().toISOString().slice(0, 35);
+    const isActive = status === 'active';
     try {
       const idToken = await firebaseUser.getIdToken();
-      const res = await fetch('/api/admin/firms/status', {
+      await fetch('/api/admin/firms/status', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${idToken}`,
         },
         body: JSON.stringify({ firmId, status }),
+      }).catch(() => null);
+
+      // Explicitly update Firestore with Client SDK to guarantee persistence
+      await updateDoc(doc(db, 'firms', firmId), {
+        status,
+        active: isActive,
+        updatedAt: nowIso,
       });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        return { ok: false, error: data.error || 'Failed to update firm status.' };
-      }
       return { ok: true };
     } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : 'Network error updating firm status.',
-      };
+      try {
+        await updateDoc(doc(db, 'firms', firmId), {
+          status,
+          active: isActive,
+          updatedAt: nowIso,
+        });
+        return { ok: true };
+      } catch (clientErr) {
+        return {
+          ok: false,
+          error: clientErr instanceof Error ? clientErr.message : 'Network error updating firm status.',
+        };
+      }
     }
   };
 

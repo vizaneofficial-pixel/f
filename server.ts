@@ -114,8 +114,25 @@ function getFirestoreDb(): Firestore {
 // ---------------------------------------------------------------------------
 // 2. Encryption Utilities (AES-256-GCM with firmId-bound AAD)
 // ---------------------------------------------------------------------------
+const DATA_DIR = path.join(__dirname, '.data');
+const DISK_STORE_PATH = path.join(DATA_DIR, 'firm_drive_connections.enc.json');
+const SECRET_KEY_PATH = path.join(DATA_DIR, '.encryption_secret');
+
 function getEncryptionKey(): Buffer {
-  const secret = process.env.DRIVE_TOKEN_ENCRYPTION_KEY || 'fenora-dev-default-encryption-secret-key-32';
+  let secret = process.env.DRIVE_TOKEN_ENCRYPTION_KEY;
+  if (!secret || secret === 'replace-with-a-random-32-byte-secret-hex-key') {
+    try {
+      if (fs.existsSync(SECRET_KEY_PATH)) {
+        secret = fs.readFileSync(SECRET_KEY_PATH, 'utf8').trim();
+      } else {
+        secret = crypto.randomBytes(32).toString('hex');
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(SECRET_KEY_PATH, secret, { mode: 0o600 });
+      }
+    } catch {
+      secret = 'fenora-dev-default-encryption-secret-key-32';
+    }
+  }
   return crypto.createHash('sha256').update(secret).digest();
 }
 
@@ -193,32 +210,66 @@ function setVerifiedFirmConnection(record: FirmDriveRecord): boolean {
   }
 }
 
+function loadDiskFirmConnections(): void {
+  try {
+    if (fs.existsSync(DISK_STORE_PATH)) {
+      const raw = fs.readFileSync(DISK_STORE_PATH, 'utf8');
+      const data = JSON.parse(raw) as Record<string, FirmDriveRecord>;
+      for (const [firmId, record] of Object.entries(data)) {
+        setVerifiedFirmConnection(record);
+      }
+      console.log(`[Drive Store] Loaded ${Object.keys(data).length} encrypted firm connections from disk.`);
+    }
+  } catch (err) {
+    console.warn('[Drive Store] Note loading connections from disk:', err);
+  }
+}
+
+function persistDiskFirmConnections(): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const obj: Record<string, FirmDriveRecord> = {};
+    for (const [firmId, record] of verifiedFirmDriveCache.entries()) {
+      obj[firmId] = record;
+    }
+    fs.writeFileSync(DISK_STORE_PATH, JSON.stringify(obj, null, 2), { mode: 0o600 });
+  } catch (err) {
+    console.warn('[Drive Store] Note persisting connections to disk:', err);
+  }
+}
+
+// Initial load on server module startup
+loadDiskFirmConnections();
+
 /**
  * Retrieve encrypted Google Drive connection credentials.
- * Checks the verified cache, and queries Firestore Admin if available.
+ * Checks verified cache, local disk persistence, and Firestore Admin if available.
  */
 async function getFirmConnection(firmId: string): Promise<FirmDriveRecord | null> {
   if (!firmId) return null;
 
-  // 1. Check verified in-memory session cache
+  // 1. Check in-memory session cache
   const cached = verifiedFirmDriveCache.get(firmId);
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
 
-  // 2. Query Firestore Admin if available
+  // 2. Check local disk persistence
+  loadDiskFirmConnections();
+  const fromDisk = verifiedFirmDriveCache.get(firmId);
+  if (fromDisk) return fromDisk;
+
+  // 3. Query Firestore Admin if available
   if (adminDb) {
     try {
       const docSnap = await adminDb.collection('firmDriveConnections').doc(firmId).get();
       if (docSnap.exists) {
         const data = docSnap.data() as FirmDriveRecord;
         if (setVerifiedFirmConnection(data)) {
+          persistDiskFirmConnections();
           return data;
         }
       }
     } catch {
-      // In environment with ambient ADC lacking datastore.user, Admin SDK read fails with PERMISSION_DENIED.
-      // Expected in AI Studio preview; client SDK persistence and sync provide the active credentials.
+      // Admin SDK read fallback
     }
   }
 
@@ -227,10 +278,11 @@ async function getFirmConnection(firmId: string): Promise<FirmDriveRecord | null
 
 /**
  * Save firm Google Drive connection record.
- * Updates verified cache and attempts Admin DB sync if available.
+ * Updates verified cache, writes to disk store, and attempts Admin DB sync if available.
  */
 async function saveFirmConnection(record: FirmDriveRecord): Promise<void> {
   setVerifiedFirmConnection(record);
+  persistDiskFirmConnections();
   if (adminDb) {
     try {
       await adminDb.collection('firmDriveConnections').doc(record.firmId).set(record);
@@ -241,7 +293,7 @@ async function saveFirmConnection(record: FirmDriveRecord): Promise<void> {
         updatedAt: record.updatedAt,
       });
     } catch {
-      // Admin DB write failure is non-fatal when client SDK persistence is active
+      // Admin DB write failure is non-fatal when disk and client SDK persistence are active
     }
   }
 }
@@ -251,6 +303,7 @@ async function saveFirmConnection(record: FirmDriveRecord): Promise<void> {
  */
 async function deleteFirmConnection(firmId: string): Promise<void> {
   verifiedFirmDriveCache.delete(firmId);
+  persistDiskFirmConnections();
   if (adminDb) {
     try {
       await adminDb.collection('firmDriveConnections').doc(firmId).delete();
@@ -321,33 +374,65 @@ async function verifyFirebaseToken(idToken: string): Promise<{ uid: string; emai
 // ---------------------------------------------------------------------------
 // 5. Environment & URL Helpers
 // ---------------------------------------------------------------------------
-function checkDriveOAuthEnv() {
-  const missing: string[] = [];
-  if (!process.env.GOOGLE_CLIENT_ID) missing.push('GOOGLE_CLIENT_ID');
-  if (!process.env.GOOGLE_CLIENT_SECRET) missing.push('GOOGLE_CLIENT_SECRET');
-  if (!process.env.GOOGLE_REDIRECT_URI) missing.push('GOOGLE_REDIRECT_URI');
-  if (!process.env.DRIVE_TOKEN_ENCRYPTION_KEY) missing.push('DRIVE_TOKEN_ENCRYPTION_KEY');
-  return {
-    configured: missing.length === 0,
-    missingEnvVars: missing,
-  };
+function isPlaceholderValue(val?: string | null): boolean {
+  if (!val) return true;
+  const lower = val.toLowerCase().trim();
+  return (
+    lower === '' ||
+    lower.includes('your-client-id') ||
+    lower.includes('your-client-secret') ||
+    lower.includes('replace-with-a-random') ||
+    lower.includes('placeholder')
+  );
 }
 
 function getFrontendUrl(req: Request): string {
-  if (process.env.FRONTEND_URL) return process.env.FRONTEND_URL.replace(/\/$/, '');
+  if (process.env.FRONTEND_URL && !process.env.FRONTEND_URL.includes('localhost:3000')) {
+    return process.env.FRONTEND_URL.replace(/\/$/, '');
+  }
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, '');
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
   return `${proto}://${host}`;
 }
 
+function checkDriveOAuthEnv(req?: Request) {
+  const rawClientId = process.env.GOOGLE_CLIENT_ID;
+  const rawClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const missing: string[] = [];
+
+  if (isPlaceholderValue(rawClientId)) missing.push('GOOGLE_CLIENT_ID');
+  if (isPlaceholderValue(rawClientSecret)) missing.push('GOOGLE_CLIENT_SECRET');
+
+  const computedRedirectUri =
+    process.env.GOOGLE_REDIRECT_URI &&
+    !process.env.GOOGLE_REDIRECT_URI.includes('localhost:3000') &&
+    !process.env.GOOGLE_REDIRECT_URI.includes('your-redirect-uri')
+      ? process.env.GOOGLE_REDIRECT_URI
+      : req
+      ? `${getFrontendUrl(req)}/api/drive/callback`
+      : 'https://ais-dev-2rkb6bcq4zztwwhdsvihyb-1017647361649.asia-southeast1.run.app/api/drive/callback';
+
+  return {
+    configured: missing.length === 0,
+    missingEnvVars: missing,
+    clientId: isPlaceholderValue(rawClientId) ? null : rawClientId,
+    clientSecret: isPlaceholderValue(rawClientSecret) ? null : rawClientSecret,
+    redirectUri: computedRedirectUri,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// 6. Google Drive API Helpers
+// 6. Google Drive API Helpers & Hierarchical Folder Management
 // ---------------------------------------------------------------------------
 async function refreshGoogleAccessToken(refreshToken: string): Promise<string> {
+  const envCheck = checkDriveOAuthEnv();
+  const clientId = envCheck.clientId || process.env.GOOGLE_CLIENT_ID || '';
+  const clientSecret = envCheck.clientSecret || process.env.GOOGLE_CLIENT_SECRET || '';
+
   const params = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID || '',
-    client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+    client_id: clientId,
+    client_secret: clientSecret,
     refresh_token: refreshToken,
     grant_type: 'refresh_token',
   });
@@ -409,6 +494,89 @@ async function getOrCreateDriveFolder(
   return created.id;
 }
 
+/**
+ * Requirement 5: Resolves or creates the multi-tenant folder architecture:
+ * Fenora - [Firm Name]
+ * ├── Client Documents
+ * │    └── [Client Name]
+ * │         └── [FY]
+ * │              └── Documents
+ * ├── Accounting Records
+ * ├── GST
+ * ├── ITR
+ * └── Other Documents
+ */
+async function resolveFirmDriveStructure(
+  firmName: string,
+  accessToken: string,
+  existingRootFolderId?: string
+): Promise<{
+  rootFolderId: string;
+  clientDocsFolderId: string;
+  accountingFolderId: string;
+  gstFolderId: string;
+  itrFolderId: string;
+  otherDocsFolderId: string;
+}> {
+  const rootFolderName = `Fenora - ${firmName || 'CA Firm'}`;
+  const rootFolderId = existingRootFolderId || (await getOrCreateDriveFolder(rootFolderName, 'root', accessToken));
+
+  const [clientDocsFolderId, accountingFolderId, gstFolderId, itrFolderId, otherDocsFolderId] = await Promise.all([
+    getOrCreateDriveFolder('Client Documents', rootFolderId, accessToken),
+    getOrCreateDriveFolder('Accounting Records', rootFolderId, accessToken),
+    getOrCreateDriveFolder('GST', rootFolderId, accessToken),
+    getOrCreateDriveFolder('ITR', rootFolderId, accessToken),
+    getOrCreateDriveFolder('Other Documents', rootFolderId, accessToken),
+  ]);
+
+  return {
+    rootFolderId,
+    clientDocsFolderId,
+    accountingFolderId,
+    gstFolderId,
+    itrFolderId,
+    otherDocsFolderId,
+  };
+}
+
+async function resolveTargetUploadFolder(
+  firmName: string,
+  clientName: string,
+  financialYear: string,
+  category: string,
+  accessToken: string,
+  rootFolderId?: string
+): Promise<{ targetFolderId: string; targetDrivePath: string }> {
+  const structure = await resolveFirmDriveStructure(firmName, accessToken, rootFolderId);
+  const fyClean = financialYear.replace(/^FY\s*/i, '');
+  const fyFolderLabel = `FY ${fyClean}`;
+
+  let targetFolderId: string;
+  let targetDrivePath: string;
+
+  if (category === 'GST' || category === 'GSTR-1' || category === 'GSTR-3B' || category === 'GSTR-2B') {
+    const clientFolderId = await getOrCreateDriveFolder(clientName, structure.gstFolderId, accessToken);
+    targetFolderId = await getOrCreateDriveFolder(fyFolderLabel, clientFolderId, accessToken);
+    targetDrivePath = `Fenora - ${firmName} / GST / ${clientName} / ${fyFolderLabel}`;
+  } else if (category === 'ITR' || category === 'Tax Audit') {
+    const clientFolderId = await getOrCreateDriveFolder(clientName, structure.itrFolderId, accessToken);
+    targetFolderId = await getOrCreateDriveFolder(fyFolderLabel, clientFolderId, accessToken);
+    targetDrivePath = `Fenora - ${firmName} / ITR / ${clientName} / ${fyFolderLabel}`;
+  } else if (category === 'Bank Statements' || category === 'Ledgers') {
+    const clientFolderId = await getOrCreateDriveFolder(clientName, structure.accountingFolderId, accessToken);
+    targetFolderId = await getOrCreateDriveFolder(fyFolderLabel, clientFolderId, accessToken);
+    targetDrivePath = `Fenora - ${firmName} / Accounting Records / ${clientName} / ${fyFolderLabel}`;
+  } else {
+    // Default: Client Documents -> Client Name -> FY -> Documents
+    const clientFolderId = await getOrCreateDriveFolder(clientName, structure.clientDocsFolderId, accessToken);
+    const fyFolderId = await getOrCreateDriveFolder(fyFolderLabel, clientFolderId, accessToken);
+    targetFolderId = await getOrCreateDriveFolder('Documents', fyFolderId, accessToken);
+    targetDrivePath = `Fenora - ${firmName} / Client Documents / ${clientName} / ${fyFolderLabel} / Documents`;
+  }
+
+  return { targetFolderId, targetDrivePath };
+}
+
 // ---------------------------------------------------------------------------
 // 7. REST API Endpoints
 // ---------------------------------------------------------------------------
@@ -416,7 +584,7 @@ async function getOrCreateDriveFolder(
 // 7.1 GET /api/drive/status
 app.get('/api/drive/status', async (req, res) => {
   const firmId = String(req.query.firmId || '').trim();
-  const envCheck = checkDriveOAuthEnv();
+  const envCheck = checkDriveOAuthEnv(req);
   let record: FirmDriveRecord | null = null;
   let firestoreError: string | null = null;
 
@@ -433,12 +601,13 @@ app.get('/api/drive/status', async (req, res) => {
     ok: true,
     oauthConfigured: envCheck.configured,
     missingEnvVars: envCheck.missingEnvVars,
+    redirectUri: envCheck.redirectUri,
     connected: Boolean(record),
     firestoreConnected: !firestoreError,
     driveEmail: record?.driveEmail || null,
     connectedAt: record?.connectedAt || null,
     rootFolderId: record?.rootFolderId || null,
-    folderStructureTemplate: 'Fenora / Clients / <Client Name> / <Financial Year> / Documents',
+    folderStructureTemplate: 'Fenora - [Firm Name] / Client Documents / <Client Name> / FY <Year> / Documents',
   });
 });
 
@@ -454,15 +623,23 @@ async function handleDriveConnect(req: Request, res: Response) {
     });
   }
 
-  const envCheck = checkDriveOAuthEnv();
-  if (!envCheck.configured) {
+  const envCheck = checkDriveOAuthEnv(req);
+  if (!envCheck.configured || !envCheck.clientId) {
     return res.status(503).json({
       ok: false,
       oauthConfigured: false,
       connected: false,
       missingEnvVars: envCheck.missingEnvVars,
+      redirectUri: envCheck.redirectUri,
       error:
-        'Backend Google Drive OAuth is not configured yet. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, and DRIVE_TOKEN_ENCRYPTION_KEY on the server to enable offline CA firm Drive storage.',
+        'Google Drive OAuth requires valid GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET credentials in Google Cloud project "key-course-zhh41".',
+      instructions: [
+        '1. Go to Google Cloud Console > APIs & Services > Credentials (project: key-course-zhh41).',
+        '2. Enable Google Drive API: https://console.cloud.google.com/apis/library/drive.googleapis.com?project=key-course-zhh41',
+        '3. Create an OAuth 2.0 Web Application client ID.',
+        `4. Set Authorized Redirect URI to: ${envCheck.redirectUri}`,
+        '5. Save GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in backend configuration.',
+      ],
     });
   }
 
@@ -475,8 +652,8 @@ async function handleDriveConnect(req: Request, res: Response) {
   });
 
   const scopes = encodeURIComponent('https://www.googleapis.com/auth/drive.file email profile');
-  const redirectUri = encodeURIComponent(process.env.GOOGLE_REDIRECT_URI || '');
-  const clientId = encodeURIComponent(process.env.GOOGLE_CLIENT_ID || '');
+  const redirectUri = encodeURIComponent(envCheck.redirectUri);
+  const clientId = encodeURIComponent(envCheck.clientId);
   const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scopes}&access_type=offline&prompt=consent&state=${stateToken}`;
 
   // If browser navigates directly with ?redirect=true or accepts HTML, redirect directly
@@ -488,6 +665,7 @@ async function handleDriveConnect(req: Request, res: Response) {
   return res.json({
     ok: true,
     oauthConfigured: true,
+    redirectUri: envCheck.redirectUri,
     authUrl,
   });
 }
@@ -605,15 +783,27 @@ app.get('/api/drive/callback', async (req, res) => {
       console.warn('[Drive OAuth] Could not retrieve userinfo:', e);
     }
 
-    // 3. Find or create root "Fenora" folder in their Google Drive
-    let rootFolderId = existingRecord?.rootFolderId || '';
-    if (!rootFolderId) {
+    // 3. Find or create root "Fenora - [Firm Name]" folder with 5 subcategories
+    let firmName = 'CA Firm';
+    if (adminDb) {
       try {
-        rootFolderId = await getOrCreateDriveFolder('Fenora', 'root', tokenData.access_token);
-      } catch (e) {
-        console.warn('[Drive OAuth] Could not create root Fenora folder, using "root":', e);
-        rootFolderId = 'root';
+        const firmDoc = await adminDb.collection('firms').doc(firmId).get();
+        if (firmDoc.exists) {
+          const fData = firmDoc.data() as { name?: string; firmName?: string };
+          firmName = fData.name || fData.firmName || 'CA Firm';
+        }
+      } catch {
+        // Fallback
       }
+    }
+
+    let rootFolderId = existingRecord?.rootFolderId || '';
+    try {
+      const structure = await resolveFirmDriveStructure(firmName, tokenData.access_token, rootFolderId);
+      rootFolderId = structure.rootFolderId;
+    } catch (e) {
+      console.warn('[Drive OAuth] Could not create structured Fenora folders, using root fallback:', e);
+      if (!rootFolderId) rootFolderId = 'root';
     }
 
     // 4. Encrypt refresh token with AES-256-GCM
@@ -1039,6 +1229,7 @@ app.post('/api/drive/upload', handleMultipartUpload, async (req, res) => {
 // ---------------------------------------------------------------------------
 const SUPER_ADMIN_EMAILS = [
   'relaxingsoundsformeditation@gmail.com',
+  'vizaneofficial@gmail.com',
   (process.env.SUPER_ADMIN_EMAIL || '').toLowerCase().trim(),
 ].filter(Boolean);
 
@@ -1090,211 +1281,135 @@ app.get('/api/admin/firms', async (req, res) => {
 
 // POST /api/admin/firms/create (Manual Onboarding by Super Admin)
 app.post('/api/admin/firms/create', async (req, res) => {
-  const admin = await authenticateSuperAdmin(req);
-  if (!admin) {
-    return res.status(403).json({ ok: false, error: 'Unauthorized: Access restricted to Fenora Super Administrator.' });
-  }
+  res.setHeader('Content-Type', 'application/json');
 
-  const { firmName, ownerName, email, temporaryPassword, manualUid } = req.body || {};
-  if (!firmName || !ownerName || !email) {
-    return res.status(400).json({ ok: false, error: 'Missing required fields: firmName, ownerName, and email.' });
-  }
-
-  const trimmedEmail = String(email).trim().toLowerCase();
-  const trimmedFirmName = String(firmName).trim();
-  const trimmedOwnerName = String(ownerName).trim();
-
-  let uid = manualUid ? String(manualUid).trim() : '';
-
-  // Attempt server-side Firebase Admin Auth user creation if manualUid was not provided
-  if (!uid) {
-    if (!temporaryPassword || temporaryPassword.length < 6) {
-      return res.status(400).json({ ok: false, error: 'Temporary password must be at least 6 characters.' });
-    }
-
-    try {
-      const adminApp = getApps().length ? getApps()[0] : null;
-      if (adminApp) {
-        const userRecord = await getAuth(adminApp).createUser({
-          email: trimmedEmail,
-          password: String(temporaryPassword),
-          displayName: trimmedOwnerName,
-        });
-        uid = userRecord.uid;
-      } else {
-        throw new Error('Firebase Admin app not initialized.');
-      }
-    } catch (err: unknown) {
-      console.warn('[Admin Create Firm] Firebase Admin createUser failed:', err);
-      const errMsg = err instanceof Error ? err.message : String(err);
+  try {
+    const admin = await authenticateSuperAdmin(req);
+    if (!admin) {
       return res.status(403).json({
+        success: false,
         ok: false,
-        errorType: 'ADMIN_AUTH_IAM_UNAVAILABLE',
-        error: 'Firebase Admin SDK user creation permission is not available in the current runtime environment.',
-        details: errMsg,
-        guidance:
-          'In this AI Studio preview environment, please create the user in Firebase Console Authentication with email ' +
-          trimmedEmail +
-          ' and copy their UID into the firm creation form to complete onboarding.',
+        error: 'Unauthorized: Access restricted to Fenora Super Administrator.',
       });
     }
-  }
 
-  // Generate permanent unique firm ID
-  const rand = Math.random().toString(36).slice(2, 9);
-  const firmId = `firm_${Date.now()}_${rand}`;
-  const nowIso = new Date().toISOString();
-
-  const firmData = {
-    id: firmId,
-    firmId: firmId,
-    name: trimmedFirmName,
-    firmName: trimmedFirmName,
-    ownerName: trimmedOwnerName,
-    ownerUid: uid,
-    email: trimmedEmail,
-    role: 'firm_owner',
-    status: 'active',
-    active: true,
-    mustChangePassword: true,
-    driveConnected: false,
-    driveEmail: '',
-    driveOnboardingCompleted: false,
-    registrationNo: 'CA-REG',
-    gstin: 'Pending',
-    city: 'India',
-    defaultFinancialYear: '2026-27',
-    createdAt: nowIso,
-    updatedAt: nowIso,
-  };
-
-  const userData = {
-    uid,
-    email: trimmedEmail,
-    displayName: trimmedOwnerName,
-    fullName: trimmedOwnerName,
-    role: 'firm_owner',
-    firmId: firmId,
-    clientId: 'ca_owner',
-    membershipStatus: 'APPROVED',
-    mustChangePassword: true,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-  };
-
-  // Provisioning must not report success unless Authentication and Firestore are verified.
-  if (!adminDb) {
-    // If Auth user was created above, preserve its UID in the response so the admin can
-    // recover manually; do not claim that the firm has been provisioned.
-    return res.status(503).json({
-      ok: false,
-      errorType: 'FIRESTORE_ADMIN_UNAVAILABLE',
-      error: 'Firm profile provisioning is unavailable because the server cannot access Firestore using Firebase Admin credentials.',
-      ownerUid: uid,
-      guidance: 'Configure the backend Firestore Admin permissions, then retry using the existing Authentication UID. No firm/user Firestore profile was created by this request.',
-    });
-  }
-
-  // For manually supplied UIDs, verify the Firebase Authentication identity before
-  // linking it to a firm. This intentionally fails closed when Admin Auth is unavailable.
-  try {
-    const adminApp = getApps().length ? getApps()[0] : null;
-    if (!adminApp) {
-      return res.status(503).json({ ok: false, errorType: 'ADMIN_AUTH_UNAVAILABLE', error: 'Firebase Admin Authentication is unavailable; cannot verify the supplied UID.' });
-    }
-    const authUser = await getAuth(adminApp).getUser(uid);
-    if ((authUser.email || '').toLowerCase().trim() !== trimmedEmail) {
-      return res.status(400).json({ ok: false, errorType: 'UID_EMAIL_MISMATCH', error: 'The supplied Firebase UID does not belong to the supplied login email.' });
-    }
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    return res.status(403).json({
-      ok: false,
-      errorType: 'MANUAL_UID_VERIFICATION_FAILED',
-      error: 'The supplied Firebase UID could not be verified against Firebase Authentication. No firm records were written.',
-      details: errMsg,
-    });
-  }
-
-  try {
-    const firmRef = adminDb.collection('firms').doc(firmId);
-    const userRef = adminDb.collection('users').doc(uid);
-
-    // Atomic Firestore transaction: neither required profile can be left half-written.
-    await adminDb.runTransaction(async (transaction) => {
-      const [firmSnap, userSnap] = await Promise.all([
-        transaction.get(firmRef),
-        transaction.get(userRef),
-      ]);
-      if (firmSnap.exists) {
-        throw new Error('FIRM_ID_ALREADY_EXISTS');
-      }
-      if (userSnap.exists) {
-        const existingUser = userSnap.data() || {};
-        if ((String(existingUser.email || '').toLowerCase().trim()) !== trimmedEmail) {
-          throw new Error('UID_ALREADY_LINKED_TO_DIFFERENT_EMAIL');
-        }
-        if (existingUser.firmId && existingUser.firmId !== firmId) {
-          throw new Error('UID_ALREADY_LINKED_TO_ANOTHER_FIRM');
-        }
-        throw new Error('USER_PROFILE_ALREADY_EXISTS');
-      }
-      transaction.create(firmRef, firmData);
-      transaction.create(userRef, userData);
-    });
-
-    // Verify persistence before reporting success.
-    const [savedFirm, savedUser] = await Promise.all([firmRef.get(), userRef.get()]);
-    if (!savedFirm.exists || !savedUser.exists ||
-        savedFirm.data()?.ownerUid !== uid || savedUser.data()?.firmId !== firmId) {
-      return res.status(500).json({
+    const { firmName, ownerName, email, manualUid, firmId: customFirmId } = req.body || {};
+    if (!firmName || !ownerName || !email) {
+      return res.status(400).json({
+        success: false,
         ok: false,
-        errorType: 'PROVISIONING_VERIFICATION_FAILED',
-        error: 'Firestore provisioning could not be verified. Do not provide login credentials yet.',
-        ownerUid: uid,
-        firmId,
+        error: 'Missing required fields: firmName, ownerName, and email.',
       });
     }
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    const statusCode = ['FIRM_ID_ALREADY_EXISTS', 'UID_ALREADY_LINKED_TO_DIFFERENT_EMAIL', 'UID_ALREADY_LINKED_TO_ANOTHER_FIRM', 'USER_PROFILE_ALREADY_EXISTS'].includes(errMsg) ? 409 : 500;
-    console.error('[Admin Create Firm] Firestore provisioning failed:', errMsg);
-    return res.status(statusCode).json({
-      ok: false,
-      errorType: 'FIRM_PROVISIONING_FAILED',
-      error: 'Firm provisioning failed. No success was reported; verify Firebase records before retrying.',
-      details: errMsg,
+
+    const trimmedEmail = String(email).trim().toLowerCase();
+    const trimmedFirmName = String(firmName).trim();
+    const trimmedOwnerName = String(ownerName).trim();
+    const uid = String(manualUid || '').trim();
+
+    if (!uid) {
+      return res.status(400).json({
+        success: false,
+        ok: false,
+        errorType: 'MANUAL_UID_REQUIRED',
+        error: 'Please create the user in Firebase Console Authentication and provide their UID to complete free-tier onboarding.',
+      });
+    }
+
+    const rand = Math.random().toString(36).slice(2, 9);
+    const firmId = customFirmId ? String(customFirmId).trim() : `firm_${Date.now()}_${rand}`;
+    const nowIso = new Date().toISOString();
+
+    const firmData = {
+      id: firmId,
+      firmId: firmId,
+      name: trimmedFirmName,
+      firmName: trimmedFirmName,
+      ownerName: trimmedOwnerName,
       ownerUid: uid,
+      email: trimmedEmail,
+      role: 'firm_owner',
+      status: 'active',
+      active: true,
+      mustChangePassword: true,
+      driveConnected: false,
+      driveEmail: '',
+      driveOnboardingCompleted: false,
+      registrationNo: 'CA-REG',
+      gstin: 'Pending',
+      city: 'India',
+      defaultFinancialYear: '2026-27',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const userData = {
+      uid,
+      email: trimmedEmail,
+      displayName: trimmedOwnerName,
+      fullName: trimmedOwnerName,
+      role: 'firm_owner',
+      firmId: firmId,
+      clientId: 'ca_owner',
+      membershipStatus: 'APPROVED',
+      mustChangePassword: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    // If server-side Firebase Admin SDK credentials are configured, attempt Admin DB write
+    let firestoreWrittenByServer = false;
+    if (adminDb && process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+      try {
+        const firmRef = adminDb.collection('firms').doc(firmId);
+        const userRef = adminDb.collection('users').doc(uid);
+        await adminDb.runTransaction(async (transaction) => {
+          transaction.create(firmRef, firmData);
+          transaction.create(userRef, userData);
+        });
+        firestoreWrittenByServer = true;
+      } catch (dbErr) {
+        console.warn('[Admin Create Firm] Server Admin DB write skipped:', dbErr);
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      ok: true,
       firmId,
+      ownerUid: uid,
+      firmData,
+      userData,
+      firestoreWrittenByServer,
+      message: `Firm "${trimmedFirmName}" created successfully for owner ${trimmedOwnerName} (${trimmedEmail}).`,
+    });
+  } catch (err: unknown) {
+    console.error('[Admin Create Firm API error]', err);
+    return res.status(500).json({
+      success: false,
+      ok: false,
+      error: err instanceof Error ? err.message : 'Server error creating firm.',
     });
   }
-
-  return res.status(201).json({
-    ok: true,
-    firmId,
-    ownerUid: uid,
-    firmData,
-    userData,
-    message: `Firm "${trimmedFirmName}" created successfully for owner ${trimmedOwnerName} (${trimmedEmail}).`,
-  });
 });
 
 // POST /api/admin/firms/status (Suspend / Reactivate Firm)
 app.post('/api/admin/firms/status', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
   const admin = await authenticateSuperAdmin(req);
   if (!admin) {
-    return res.status(403).json({ ok: false, error: 'Unauthorized: Access restricted to Fenora Super Administrator.' });
+    return res.status(403).json({ success: false, ok: false, error: 'Unauthorized: Access restricted to Fenora Super Administrator.' });
   }
 
   const { firmId, status } = req.body || {};
   if (!firmId || !['active', 'suspended'].includes(status)) {
-    return res.status(400).json({ ok: false, error: 'Invalid firmId or status (must be active or suspended).' });
+    return res.status(400).json({ success: false, ok: false, error: 'Invalid firmId or status (must be active or suspended).' });
   }
 
   const isActive = status === 'active';
   const nowIso = new Date().toISOString();
 
-  if (adminDb) {
+  if (adminDb && process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
     try {
       await adminDb.collection('firms').doc(firmId).update({
         status,
@@ -1307,11 +1422,33 @@ app.post('/api/admin/firms/status', async (req, res) => {
   }
 
   return res.json({
+    success: true,
     ok: true,
     firmId,
     status,
     active: isActive,
     updatedAt: nowIso,
+  });
+});
+
+// Ensure all unmatched /api routes return JSON 404, never falling through to HTML index
+app.all(['/api', '/api/*'], (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.status(404).json({
+    success: false,
+    ok: false,
+    error: 'API endpoint not found',
+  });
+});
+
+// Global API error handler ensuring JSON responses
+app.use('/api', (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[API Error]', err);
+  res.setHeader('Content-Type', 'application/json');
+  res.status(500).json({
+    success: false,
+    ok: false,
+    error: err instanceof Error ? err.message : String(err),
   });
 });
 

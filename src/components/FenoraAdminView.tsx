@@ -98,36 +98,43 @@ export const FenoraAdminView: React.FC = () => {
     setAddSuccess(null);
     setIamGuidance(null);
 
-    if (!firmName.trim() || !ownerName.trim() || !email.trim()) {
-      setAddError('Please fill in all required fields.');
+    const trimmedFirm = firmName.trim();
+    const trimmedOwner = ownerName.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedUid = manualUid.trim();
+
+    if (!trimmedFirm || !trimmedOwner || !trimmedEmail) {
+      setAddError('Please fill in all required fields (Firm Name, Owner Name, Email).');
       return;
     }
-    if (!manualUid && (!tempPassword || tempPassword.length < 6)) {
+    if (!trimmedUid) {
+      setAddError('Firebase Auth User UID is required. Please create the user in Firebase Console Authentication (see instructions below) and paste their UID.');
+      return;
+    }
+    if (tempPassword && tempPassword.length < 6) {
       setAddError('Temporary password must be at least 6 characters.');
       return;
     }
 
     setIsSubmitting(true);
     const res = await createFirmAdmin({
-      firmName: firmName.trim(),
-      ownerName: ownerName.trim(),
-      email: email.trim().toLowerCase(),
+      firmName: trimmedFirm,
+      ownerName: trimmedOwner,
+      email: trimmedEmail,
       temporaryPassword: tempPassword,
-      manualUid: manualUid.trim() || undefined,
+      manualUid: trimmedUid,
     });
     setIsSubmitting(false);
 
     if (!res.ok) {
-      if (res.errorType === 'ADMIN_AUTH_IAM_UNAVAILABLE') {
-        setAddError(res.error || 'Firebase Admin SDK permission unavailable.');
-        setIamGuidance(res.guidance || 'Please create the user in Firebase Console and paste their UID.');
-      } else {
-        setAddError(res.error || 'Failed to create firm.');
+      setAddError(res.error || 'Failed to onboard firm.');
+      if (res.guidance) {
+        setIamGuidance(res.guidance);
       }
       return;
     }
 
-    setAddSuccess(`Firm "${firmName}" onboarded successfully for owner ${ownerName} (${email}). Initial password must be updated upon first sign-in.`);
+    setAddSuccess(`Firm "${trimmedFirm}" onboarded successfully for owner ${trimmedOwner} (${trimmedEmail}). The firm owner will be required to change their password upon first sign-in.`);
     setFirmName('');
     setOwnerName('');
     setEmail('');
@@ -545,6 +552,7 @@ export const FenoraAdminView: React.FC = () => {
                 </label>
                 <input
                   type="text"
+                  required
                   value={tempPassword}
                   onChange={(e) => setTempPassword(e.target.value)}
                   placeholder="e.g. Fenora#2026 (min 6 characters)"
@@ -555,23 +563,45 @@ export const FenoraAdminView: React.FC = () => {
                 </p>
               </div>
 
-              {iamGuidance && (
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                  <label className="block text-xs font-semibold text-slate-800 dark:text-slate-200 mb-1">
-                    Firebase Auth User UID (Console Fallback)
-                  </label>
+              {/* Free-Tier Manual UID Workflow */}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-semibold text-xs text-slate-800 dark:text-slate-200">
+                    <Info className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>5. Firebase Auth User UID *</span>
+                  </div>
+                  <a
+                    href="https://console.firebase.google.com/project/key-course-zhh41/authentication/users"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline font-medium"
+                  >
+                    <span>Open Firebase Console</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 space-y-1 bg-white/70 dark:bg-slate-900/70 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 font-sans">
+                  <p className="font-semibold text-slate-700 dark:text-slate-300">Free-Tier 3-Step Setup:</p>
+                  <p>1. In Firebase Console &rarr; <strong>Authentication &rarr; Users</strong>, click <strong>&quot;Add user&quot;</strong>.</p>
+                  <p>2. Enter the <strong>Login Email</strong> and <strong>Temporary Password</strong> specified above.</p>
+                  <p>3. Copy the generated <strong>User UID</strong> and paste it in the box below.</p>
+                </div>
+
+                <div>
                   <input
                     type="text"
+                    required
                     value={manualUid}
                     onChange={(e) => setManualUid(e.target.value)}
-                    placeholder="Paste the UID from Firebase Console Auth"
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    placeholder="e.g. WqK18d9Jp2Z4bX7cM..."
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                   />
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Creates the Firestore firm profile, sets mustChangePassword: true, and links to this user.
+                    Fenora will initialize the firm profile and user records with <code className="font-mono text-emerald-600">mustChangePassword: true</code>.
                   </p>
                 </div>
-              )}
+              </div>
 
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
                 <button
